@@ -1,6 +1,6 @@
 
 
-# Declare sources from the submodules directory
+# Things needed from the submodules directory (relative to src)
 # =====================================================================
 THIRD_PARTY += ../third_party/patches/patches.cpp
 THIRD_PARTY += ../third_party/patches/patches.hpp
@@ -38,6 +38,7 @@ post-build: main-build
 	@find src -type l -delete
 
 $(EXE): $(OBJ)
+	$(CXX) -o $@ $^
 
 clean:
 	$(RM) $(OBJ) $(DEP) $(EXE)

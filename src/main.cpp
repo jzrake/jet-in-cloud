@@ -94,17 +94,16 @@ struct gaussian_density
 void write_database(const Database& database)
 {
     auto parts = std::vector<std::string>{"data", "chkpt.0000.bt"};
-
-    FileSystem::removeRecursively(FileSystem::joinPath(parts));
+    filesystem::remove_recurse(filesystem::join(parts));
 
     for (const auto& patch : database)
     {
         parts.push_back(to_string(patch.first));
-        FileSystem::ensureParentDirectoryExists(FileSystem::joinPath(parts));
-        nd::tofile(patch.second, FileSystem::joinPath(parts));
+        filesystem::require_dir(filesystem::parent(filesystem::join(parts)));
+        nd::tofile(patch.second, filesystem::join(parts));
         parts.pop_back();
     }
-    std::cout << "Write checkpoint " << FileSystem::joinPath(parts) << std::endl;
+    std::cout << "Write checkpoint " << filesystem::join(parts) << std::endl;
 }
 
 
@@ -417,12 +416,12 @@ nd::array<double, 3> mesh_face_areas_i(nd::array<double, 3> verts)
     auto _ = nd::axis::all();
     auto p1 = 2 * M_PI;
     auto p0 = 0;
-    auto ni = verts.shape(0);
+    // auto ni = verts.shape(0);
     auto nj = verts.shape(1);
-    auto r0 = verts.select(_|0|ni-1, _|0|nj-1, _|0|1);
-    auto r1 = verts.select(_|1|ni-0, _|1|nj-0, _|0|1);
-    auto q0 = verts.select(_|0|ni-1, _|0|nj-1, _|1|2);
-    auto q1 = verts.select(_|1|ni-0, _|1|nj-0, _|1|2);
+    auto r0 = verts.select(_, _|0|nj-1, _|0|1);
+    auto r1 = verts.select(_, _|1|nj-0, _|0|1);
+    auto q0 = verts.select(_, _|0|nj-1, _|1|2);
+    auto q1 = verts.select(_, _|1|nj-0, _|1|2);
 
     auto area = ufunc::nfrom([p0, p1] (std::array<double, 4> extent)
     {
@@ -433,34 +432,39 @@ nd::array<double, 3> mesh_face_areas_i(nd::array<double, 3> verts)
         return -r0 * r0 * (p1 - p0) * (std::cos(q1) - std::cos(q0));
     });
 
+
+    // . . .
+    // . . .
+    // . . .
+
     auto args = std::array<nd::array<double, 3>, 4>{r0, r1, q0, q1};
     return area(args);
 }
 
-// nd::array<double, 3> mesh_face_areas_j(nd::array<double, 3> verts)
-// {
-//     auto _ = nd::axis::all();
-//     auto p1 = 2 * M_PI;
-//     auto p0 = 0;
-//     auto ni = verts.shape(0);
-//     auto nj = verts.shape(1);
-//     auto r0 = verts.select(_|0|ni-1, _|0|nj-1, _|0|1);
-//     auto r1 = verts.select(_|1|ni-0, _|1|nj-0, _|0|1);
-//     auto q0 = verts.select(_|0|ni-1, _|0|nj-1, _|1|2);
-//     auto q1 = verts.select(_|1|ni-0, _|1|nj-0, _|1|2);
+nd::array<double, 3> mesh_face_areas_j(nd::array<double, 3> verts)
+{
+    auto _ = nd::axis::all();
+    auto p1 = 2 * M_PI;
+    auto p0 = 0;
+    auto ni = verts.shape(0);
+    // auto nj = verts.shape(1);
+    auto r0 = verts.select(_|0|ni-1, _, _|0|1);
+    auto r1 = verts.select(_|1|ni-0, _, _|0|1);
+    auto q0 = verts.select(_|0|ni-1, _, _|1|2);
+    auto q1 = verts.select(_|1|ni-0, _, _|1|2);
 
-//     auto area = ufunc::nfrom([p0, p1] (std::array<double, 4> extent)
-//     {
-//         auto r0 = extent[0];
-//         auto r1 = extent[1];
-//         // auto q0 = extent[2];
-//         auto q1 = extent[3];
-//         return 1. / 3 * (r1 * r1 * r1 - r0 * r0 * r0) * std::sin(q0) * (p1 - p0);
-//     });
+    auto area = ufunc::nfrom([p0, p1] (std::array<double, 4> extent)
+    {
+        auto r0 = extent[0];
+        auto r1 = extent[1];
+        auto q0 = extent[2];
+        // auto q1 = extent[3];
+        return (r1 * r1 - r0 * r0) * std::sin(q0) * (p1 - p0);
+    });
 
-//     auto args = std::array<nd::array<double, 3>, 4>{r0, r1, q0, q1};
-//     return area(args);
-// }
+    auto args = std::array<nd::array<double, 3>, 4>{r0, r1, q0, q1};
+    return area(args);
+}
 
 
 // ============================================================================
@@ -483,11 +487,15 @@ Database build_database(int ni, int nj)
     auto x_verts = mesh_vertices(ni, nj, {1, 10, 0, 2 * M_PI});
     auto x_cells = mesh_cell_coords(x_verts);
     auto v_cells = mesh_cell_volumes(x_verts);
+    auto a_faces_i = mesh_face_areas_i(x_verts);
+    auto a_faces_j = mesh_face_areas_j(x_verts);
     auto U = prim_to_cons(initial_data(x_cells));
 
     database.insert(std::make_tuple(0, 0, 0, Field::vert_coords), x_verts);
     database.insert(std::make_tuple(0, 0, 0, Field::cell_coords), x_cells);
     database.insert(std::make_tuple(0, 0, 0, Field::cell_volume), v_cells);
+    database.insert(std::make_tuple(0, 0, 0, Field::face_areas_i), a_faces_i);
+    database.insert(std::make_tuple(0, 0, 0, Field::face_areas_j), a_faces_j);
     database.insert(std::make_tuple(0, 0, 0, Field::conserved), U);
 
     return database;
@@ -547,6 +555,6 @@ int main_2d(int argc, const char* argv[])
 // ============================================================================
 int main(int argc, const char* argv[])
 {
-    std::set_terminate(Debug::terminate_with_backtrace);
+    std::set_terminate(debug::terminate_with_backtrace);
     return main_2d(argc, argv);
 }

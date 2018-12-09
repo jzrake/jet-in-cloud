@@ -35,9 +35,9 @@ std::map<std::string, std::string> cmdline::parse_keyval(int argc, const char* a
 
 
 // ============================================================================
-std::vector<std::string> FileSystem::splitPath(std::string pathName)
+std::vector<std::string> filesystem::split(std::string path)
 {
-    auto remaining = pathName;
+    auto remaining = path;
     auto dirs = std::vector<std::string>();
 
     while (true)
@@ -55,7 +55,7 @@ std::vector<std::string> FileSystem::splitPath(std::string pathName)
     return dirs;
 }
 
-std::string FileSystem::joinPath(std::vector<std::string> parts)
+std::string filesystem::join(std::vector<std::string> parts)
 {
     auto res = std::string();
 
@@ -66,41 +66,35 @@ std::string FileSystem::joinPath(std::vector<std::string> parts)
     return res.substr(1);
 }
 
-std::string FileSystem::fileExtension(std::string pathName)
+std::string filesystem::extension(std::string path)
 {
-    auto dot = pathName.rfind('.');
+    auto dot = path.rfind('.');
 
     if (dot != std::string::npos)
     {
-        return pathName.substr(dot);
+        return path.substr(dot);
     }
     return "";
 }
 
-std::string FileSystem::getParentDirectory(std::string pathName)
+std::string filesystem::parent(std::string path)
 {
-    std::string::size_type lastSlash = pathName.find_last_of("/");
-    return pathName.substr(0, lastSlash);
+    std::string::size_type lastSlash = path.find_last_of("/");
+    return path.substr(0, lastSlash);
 }
 
-void FileSystem::ensureDirectoryExists(std::string dirName)
+void filesystem::require_dir(std::string path)
 {
-    auto path = std::string(".");
+    auto partial = std::string(".");
 
-    for (auto dir : splitPath(dirName))
+    for (auto dir : split(path))
     {
-        path += "/" + dir;
-        mkdir(path.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+        partial += "/" + dir;
+        mkdir(partial.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
     }
 }
 
-void FileSystem::ensureParentDirectoryExists(std::string pathName)
-{
-    std::string parentDir = getParentDirectory(pathName);
-    ensureDirectoryExists(parentDir);
-}
-
-int FileSystem::removeRecursively(std::string path)
+int filesystem::remove_recurse(std::string path)
 {
     /**
      * Adapted from:
@@ -139,7 +133,7 @@ int FileSystem::removeRecursively(std::string path)
             {
                 if (S_ISDIR(statbuf.st_mode))
                 {
-                    res2 = removeRecursively(buf.data());
+                    res2 = remove_recurse(buf.data());
                 }
                 else
                 {
@@ -158,34 +152,11 @@ int FileSystem::removeRecursively(std::string path)
     return res;
 }
 
-std::string FileSystem::makeFilename(
-    std::string directory,
-    std::string base,
-    std::string extension,
-    int number,
-    int rank)
-{
-    std::stringstream filenameStream;
-    filenameStream << directory << "/" << base;
-
-    if (number >= 0)
-    {
-        filenameStream << "." << std::setfill('0') << std::setw(4) << number;
-    }
-    if (rank != -1)
-    {
-        filenameStream << "." << std::setfill('0') << std::setw(4) << rank;
-    }
-
-    filenameStream << extension;
-    return filenameStream.str();
-}
-
 
 
 
 // ============================================================================
-void Debug::backtrace()
+void debug::backtrace()
 {
     std::cout << std::string(52, '=') << std::endl;
     std::cout << "Backtrace:\n";
@@ -232,7 +203,7 @@ void Debug::backtrace()
     }
 }
 
-void Debug::terminate_with_backtrace()
+void debug::terminate_with_backtrace()
 {
     try {
         auto e = std::current_exception();

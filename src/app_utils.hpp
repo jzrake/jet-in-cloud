@@ -67,6 +67,20 @@ namespace cmdline
 
 
 // ============================================================================
+namespace filesystem
+{
+    std::vector<std::string> split(std::string path);
+    std::string join(std::vector<std::string> parts);
+    std::string extension(std::string path);
+    std::string parent(std::string path);
+    void require_dir(std::string path);
+    int remove_recurse(std::string path);
+}
+
+
+
+
+// ============================================================================
 class Timer
 {
 public:
@@ -85,31 +99,8 @@ private:
 
 
 // ============================================================================
-class FileSystem
+namespace debug
 {
-public:
-    static std::vector<std::string> splitPath(std::string pathName);
-    static std::string joinPath(std::vector<std::string> parts);
-    static std::string fileExtension(std::string pathName);
-    static std::string getParentDirectory(std::string pathName);
-    static void ensureDirectoryExists(std::string pathName);
-    static void ensureParentDirectoryExists(std::string dirName);
-    static int removeRecursively(std::string pathName);
-    static std::string makeFilename(
-        std::string directory,
-        std::string base,
-        std::string extension,
-        int number,
-        int rank=-1);
-};
-
-
-
-
-// ============================================================================
-class Debug
-{
-public:
-    static void backtrace();
-    static void terminate_with_backtrace();
+    void backtrace();
+    void terminate_with_backtrace();
 };
