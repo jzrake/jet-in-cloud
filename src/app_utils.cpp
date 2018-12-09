@@ -25,6 +25,11 @@ std::map<std::string, std::string> cmdline::parse_keyval(int argc, const char* a
         {
             std::string key = arg.substr(0, eq_index);
             std::string val = arg.substr(eq_index + 1);
+
+            if (items.count(key))
+            {
+                throw std::invalid_argument("duplicate parameter " + key);
+            }
             items[key] = val;
         }
     }

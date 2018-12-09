@@ -37,21 +37,26 @@ def load_checkpoint(btdir):
 
 def imshow_database(database):
     import matplotlib.pyplot as plt
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
 
     fig = plt.figure()
     ax1 = fig.add_subplot(1, 1, 1)
+    div1 = make_axes_locatable(ax1)
+    cax1 = div1.append_axes('right', size='5%', pad=0.05)
 
     for key, patch in database.items():
-        X = patch['cell_coords'][:,:,0]
-        Y = patch['cell_coords'][:,:,1]
+
+        R = patch['vert_coords'][:,:,0]
+        Q = patch['vert_coords'][:,:,1]
         D = patch['conserved'][:,:,0]
+        X = R * np.cos(Q)
+        Y = R * np.sin(Q)
 
-        extent = [X[0,0], X[-1,0], Y[0,0], Y[0,-1]]
+        im1 = ax1.pcolormesh(Y, X, np.log(D), edgecolor='k', lw=0.1)
+        fig.colorbar(im1, cax=cax1, orientation='vertical')
 
-        ax1.imshow(D.T, origin='bottom', extent=extent, vmin=0.0, vmax=1.1)
-
-    ax1.set_xlim(0, 1)
-    ax1.set_ylim(0, 1)
+    ax1.set_title('Log density')
+    ax1.set_aspect('equal')
     plt.show()
 
 

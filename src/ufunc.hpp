@@ -54,6 +54,18 @@ namespace ufunc {
             return res;
         }
 
+        template<typename Shape>
+        static inline void throw_unless_same(Shape s1, Shape s2)
+        {
+            if (s1 != s2)
+            {
+                throw std::invalid_argument("argument arrays have different shapes: "
+                    + nd::shape::to_string(s1)
+                    + " and "
+                    + nd::shape::to_string(s2));
+            }
+        }
+
         template <typename, typename> struct Ufunc1;
         template <typename, typename> struct Ufunc2;
         template <typename, typename> struct Ufunc3;
@@ -83,10 +95,10 @@ struct ufunc::detail::Ufunc1
 {
     Ufunc1(Callable F) : F(F) {}
 
-    template <int Rank>
-    inline auto operator()(const nd::array<T, Rank>& A) const
+    template <typename ArrayType>
+    inline auto operator()(const ArrayType& A) const
     {
-        auto R = nd::array<T, Rank>(A.shape());
+        auto R = nd::array<T, ArrayType::rank>(A.shape());
         auto a = A.begin();
         auto r = R.begin();
 
@@ -108,15 +120,12 @@ struct ufunc::detail::Ufunc2
 {
     Ufunc2(Callable F) : F(F) {}
 
-    template <int Rank>
-    inline auto operator()(const nd::array<T, Rank>& A, const nd::array<T, Rank>& B) const
+    template <typename ArrayType>
+    inline auto operator()(const ArrayType& A, const ArrayType& B) const
     {
-        if (A.shape() != B.shape())
-        {
-            throw std::invalid_argument("input arrays have different shapes");
-        }
+        throw_unless_same(A.shape(), B.shape());
 
-        auto R = nd::array<T, Rank>(A.shape());
+        auto R = nd::array<T, ArrayType::rank>(A.shape());
         auto a = A.begin();
         auto b = B.begin();
         auto r = R.begin();
@@ -139,15 +148,13 @@ struct ufunc::detail::Ufunc3
 {
     Ufunc3(Callable F) : F(F) {}
 
-    template <int Rank>
-    inline auto operator()(const nd::array<T, Rank>& A, const nd::array<T, Rank>& B, const nd::array<T, Rank>& C) const
+    template <typename ArrayType>
+    inline auto operator()(const ArrayType& A, const ArrayType& B, const ArrayType& C) const
     {
-        if (A.shape() != B.shape() || B.shape() != C.shape())
-        {
-            throw std::invalid_argument("input arrays have different shapes");
-        }
+        throw_unless_same(A.shape(), B.shape());
+        throw_unless_same(B.shape(), C.shape());
 
-        auto R = nd::array<T, Rank>(A.shape());
+        auto R = nd::array<T, ArrayType::rank>(A.shape());
         auto a = A.begin();
         auto b = B.begin();
         auto c = C.begin();
@@ -171,20 +178,17 @@ struct ufunc::detail::Ufuncn
 {
     Ufuncn(Callable F) : F(F) {}
 
-    template <int Rank>
-    inline auto operator()(const std::array<nd::array<T, Rank>, Arity>& args) const
+    template <typename ArrayType>
+    inline auto operator()(const std::array<ArrayType, Arity>& args) const
     {
         for (std::size_t n = 0; n < Arity - 1; ++n)
         {
-            if (args[n].shape() != args[n + 1].shape())
-            {
-                throw std::invalid_argument("input arrays have different shapes");
-            }            
+            throw_unless_same(args[n].shape(), args[n + 1].shape());
         }
 
-        auto R = nd::array<T, Rank>(args[0].shape());
+        auto R = nd::array<T, ArrayType::rank>(args[0].shape());
         auto r = R.begin();
-        auto iters = std::array<typename nd::array<T, Rank>::const_iterator, Arity>();
+        auto iters = std::array<typename ArrayType::const_iterator, Arity>();
 
         for (std::size_t n = 0; n < Arity; ++n)
         {
@@ -215,15 +219,15 @@ struct ufunc::detail::Vfunc1
 {
     Vfunc1(Callable F) : F(F) {}
 
-    template <int Rank>
-    inline auto operator()(const nd::array<T, Rank>& A) const
+    template <typename ArrayType>
+    inline auto operator()(const ArrayType& A) const
     {
-        if (A.shape(Rank - 1) != ArgSize)
+        if (A.shape(ArrayType::rank - 1) != ArgSize)
         {
             throw std::invalid_argument("input array A has wrong last axis size");
         }
 
-        auto R = nd::array<T, Rank>(detail::replace_last(A.shape(), ResSize));
+        auto R = nd::array<T, ArrayType::rank>(detail::replace_last(A.shape(), ResSize));
         auto a = A.begin();
         auto r = R.begin();
 
@@ -247,23 +251,20 @@ struct ufunc::detail::Vfunc2
 {
     Vfunc2(Callable F) : F(F) {}
 
-    template <int Rank>
-    inline auto operator()(const nd::array<T, Rank>& A, const nd::array<T, Rank>& B) const
+    template <typename ArrayType>
+    inline auto operator()(const ArrayType& A, const ArrayType& B) const
     {
-        if (A.shape(Rank - 1) != ArgSize1)
+        if (A.shape(ArrayType::rank - 1) != ArgSize1)
         {
             throw std::invalid_argument("input array A has wrong last axis size");
         }
-        if (B.shape(Rank - 1) != ArgSize2)
+        if (B.shape(ArrayType::rank - 1) != ArgSize2)
         {
             throw std::invalid_argument("input array B has wrong last axis size");
         }
-        if (detail::drop_last(A.shape()) != drop_last(B.shape()))
-        {
-            throw std::invalid_argument("input arrays have different shapes other than last-axis");
-        }
+        throw_unless_same(drop_last(A.shape()), drop_last(B.shape()));
 
-        auto R = nd::array<T, Rank>(detail::replace_last(A.shape(), ResSize));
+        auto R = nd::array<T, ArrayType::rank>(detail::replace_last(A.shape(), ResSize));
         auto a = A.begin();
         auto b = B.begin();
         auto r = R.begin();
@@ -289,28 +290,25 @@ struct ufunc::detail::Vfunc3
 {
     Vfunc3(Callable F) : F(F) {}
 
-    template <int Rank>
-    inline auto operator()(const nd::array<T, Rank>& A, const nd::array<T, Rank>& B, const nd::array<T, Rank>& C) const
+    template <typename ArrayType>
+    inline auto operator()(const ArrayType& A, const ArrayType& B, const ArrayType& C) const
     {
-        if (A.shape(Rank - 1) != ArgSize1)
+        if (A.shape(ArrayType::rank - 1) != ArgSize1)
         {
             throw std::invalid_argument("input array A has wrong last-axis size");
         }
-        if (B.shape(Rank - 1) != ArgSize2)
+        if (B.shape(ArrayType::rank - 1) != ArgSize2)
         {
             throw std::invalid_argument("input array B has wrong last-axis size");
         }
-        if (C.shape(Rank - 1) != ArgSize3)
+        if (C.shape(ArrayType::rank - 1) != ArgSize3)
         {
             throw std::invalid_argument("input array B has wrong last-axis size");
         }
-        if (detail::drop_last(A.shape()) != drop_last(B.shape()) ||
-            detail::drop_last(B.shape()) != drop_last(C.shape()))
-        {
-            throw std::invalid_argument("input arrays have different shapes other than last-axis");
-        }
+        throw_unless_same(drop_last(A.shape()), drop_last(B.shape()));
+        throw_unless_same(drop_last(B.shape()), drop_last(C.shape()));
 
-        auto R = nd::array<T, Rank>(detail::replace_last(A.shape(), ResSize));
+        auto R = nd::array<T, ArrayType::rank>(detail::replace_last(A.shape(), ResSize));
         auto a = A.begin();
         auto b = B.begin();
         auto c = C.begin();

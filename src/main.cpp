@@ -44,46 +44,13 @@ struct gradient_plm
     double theta;
 };
 
-struct shocktube
-{
-    inline std::array<double, 5> operator()(std::array<double, 1> x) const
-    {
-        return x[0] < 0.5
-        ? std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 1.000}
-        : std::array<double, 5>{0.1, 0.0, 0.0, 0.0, 0.125};
-    }
-};
-
-struct shocktube_2d
-{
-    inline std::array<double, 5> operator()(std::array<double, 2> x) const
-    {
-        return x[0] + x[1] < 1.0 + 1e-10
-        ? std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 1.000}
-        : std::array<double, 5>{0.1, 0.0, 0.0, 0.0, 0.125};
-    }
-};
-
-struct cylindrical_explosion
+struct atmosphere
 {
     inline std::array<double, 5> operator()(std::array<double, 2> X) const
     {
-        auto x = X[0] - 0.5;
-        auto y = X[1] - 0.5;
-        return x * x + y * y < 0.05
-        ? std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 1.000}
-        : std::array<double, 5>{0.1, 0.0, 0.0, 0.0, 0.125};
-    }
-};
-
-struct gaussian_density
-{
-    inline std::array<double, 5> operator()(std::array<double, 2> X) const
-    {
-        auto x = X[0] - 0.25;
-        auto y = X[1] - 0.25;
-        auto d = 1 + std::exp(-(x * x + y * y) / 0.01);
-        return std::array<double, 5>{d, 0.5, 0.5, 0.0, 1.000};
+        auto r = X[0];
+        // auto q = X[1];
+        return std::array<double, 5>{std::pow(r, -2.0), 0.0, 0.0, 0.0, 0.125};
     }
 };
 
@@ -119,8 +86,7 @@ struct run_config
     std::string outdir = ".";
     double tfinal = 0.0;
     int rk = 1;
-    int ni = 100;
-    int nj = 100;
+    int nr = 32;
     int num_levels = 1;
     int threaded = 0;
 };
@@ -129,8 +95,7 @@ VISITABLE_STRUCT(run_config,
     outdir,
     tfinal,
     rk,
-    ni,
-    nj,
+    nr,
     num_levels,
     threaded);
 
@@ -366,37 +331,50 @@ nd::array<double, 3> mesh_vertices(int ni, int nj, std::array<double, 4> extent)
     {
         for (int j = 0; j < nj + 1; ++j)
         {
-            X(i, j, 0) = x0 + (x1 - x0) * i / ni;
+            X(i, j, 0) = x0 * std::pow(x1 / x0, double(i) / ni);
             X(i, j, 1) = y0 + (y1 - y0) * j / nj;
         }
     }
     return X;
 }
 
-nd::array<double, 3> mesh_cell_coords(nd::array<double, 3> verts)
+nd::array<double, 3> mesh_cell_coords(const nd::array<double, 3>& verts)
 {
-    auto _ = nd::axis::all();
-    auto ni = verts.shape(0) - 1;
-    auto nj = verts.shape(1) - 1;
+    auto centroid_r = ufunc::from([] (double r0, double r1)
+    {
+        return std::sqrt(r0 * r1);
+    });
+    auto centroid_q = ufunc::from([] (double q0, double q1)
+    {
+        return 0.5 * (q0 + q1);
+    });
 
-    return (
-    verts.select(_|0|ni+0, _|0|nj+0, _) +
-    verts.select(_|0|ni+0, _|1|nj+1, _) +
-    verts.select(_|1|ni+1, _|0|nj+0, _) +
-    verts.select(_|1|ni+1, _|1|nj+1, _)) * 0.25;
+    auto _ = nd::axis::all();
+    auto mi = verts.shape(0);
+    auto mj = verts.shape(1);
+    auto r0 = verts.select(_|0|mi-1, _|0|mj-1, _|0|1);
+    auto r1 = verts.select(_|1|mi-0, _|1|mj-0, _|0|1);
+    auto q0 = verts.select(_|0|mi-1, _|0|mj-1, _|1|2);
+    auto q1 = verts.select(_|1|mi-0, _|1|mj-0, _|1|2);
+    auto res = nd::array<double, 3>(mi - 1, mj - 1, 2);
+
+    res.select(_, _, _|0|1) = centroid_r(r0, r1);
+    res.select(_, _, _|1|2) = centroid_q(q0, q1);
+
+    return res;
 }
 
-nd::array<double, 3> mesh_cell_volumes(nd::array<double, 3> verts)
+nd::array<double, 3> mesh_cell_volumes(const nd::array<double, 3>& verts)
 {
     auto _ = nd::axis::all();
     auto p1 = 2 * M_PI;
     auto p0 = 0;
-    auto ni = verts.shape(0);
-    auto nj = verts.shape(1);
-    auto r0 = verts.select(_|0|ni-1, _|0|nj-1, _|0|1);
-    auto r1 = verts.select(_|1|ni-0, _|1|nj-0, _|0|1);
-    auto q0 = verts.select(_|0|ni-1, _|0|nj-1, _|1|2);
-    auto q1 = verts.select(_|1|ni-0, _|1|nj-0, _|1|2);
+    auto mi = verts.shape(0);
+    auto mj = verts.shape(1);
+    auto r0 = verts.select(_|0|mi-1, _|0|mj-1, _|0|1);
+    auto r1 = verts.select(_|1|mi-0, _|1|mj-0, _|0|1);
+    auto q0 = verts.select(_|0|mi-1, _|0|mj-1, _|1|2);
+    auto q1 = verts.select(_|1|mi-0, _|1|mj-0, _|1|2);
 
     auto volume = ufunc::nfrom([p0, p1] (std::array<double, 4> extent)
     {
@@ -411,17 +389,17 @@ nd::array<double, 3> mesh_cell_volumes(nd::array<double, 3> verts)
     return volume(args);
 }
 
-nd::array<double, 3> mesh_face_areas_i(nd::array<double, 3> verts)
+nd::array<double, 3> mesh_face_areas_i(const nd::array<double, 3>& verts)
 {
     auto _ = nd::axis::all();
     auto p1 = 2 * M_PI;
     auto p0 = 0;
-    // auto ni = verts.shape(0);
-    auto nj = verts.shape(1);
-    auto r0 = verts.select(_, _|0|nj-1, _|0|1);
-    auto r1 = verts.select(_, _|1|nj-0, _|0|1);
-    auto q0 = verts.select(_, _|0|nj-1, _|1|2);
-    auto q1 = verts.select(_, _|1|nj-0, _|1|2);
+    // auto mi = verts.shape(0);
+    auto mj = verts.shape(1);
+    auto r0 = verts.select(_, _|0|mj-1, _|0|1);
+    auto r1 = verts.select(_, _|1|mj-0, _|0|1);
+    auto q0 = verts.select(_, _|0|mj-1, _|1|2);
+    auto q1 = verts.select(_, _|1|mj-0, _|1|2);
 
     auto area = ufunc::nfrom([p0, p1] (std::array<double, 4> extent)
     {
@@ -432,26 +410,21 @@ nd::array<double, 3> mesh_face_areas_i(nd::array<double, 3> verts)
         return -r0 * r0 * (p1 - p0) * (std::cos(q1) - std::cos(q0));
     });
 
-
-    // . . .
-    // . . .
-    // . . .
-
     auto args = std::array<nd::array<double, 3>, 4>{r0, r1, q0, q1};
     return area(args);
 }
 
-nd::array<double, 3> mesh_face_areas_j(nd::array<double, 3> verts)
+nd::array<double, 3> mesh_face_areas_j(const nd::array<double, 3>& verts)
 {
     auto _ = nd::axis::all();
     auto p1 = 2 * M_PI;
     auto p0 = 0;
-    auto ni = verts.shape(0);
-    // auto nj = verts.shape(1);
-    auto r0 = verts.select(_|0|ni-1, _, _|0|1);
-    auto r1 = verts.select(_|1|ni-0, _, _|0|1);
-    auto q0 = verts.select(_|0|ni-1, _, _|1|2);
-    auto q1 = verts.select(_|1|ni-0, _, _|1|2);
+    auto mi = verts.shape(0);
+    // auto mj = verts.shape(1);
+    auto r0 = verts.select(_|0|mi-1, _, _|0|1);
+    auto r1 = verts.select(_|1|mi-0, _, _|0|1);
+    auto q0 = verts.select(_|0|mi-1, _, _|1|2);
+    auto q1 = verts.select(_|1|mi-0, _, _|1|2);
 
     auto area = ufunc::nfrom([p0, p1] (std::array<double, 4> extent)
     {
@@ -481,10 +454,10 @@ Database build_database(int ni, int nj)
     };
 
     auto database = Database(ni, nj, header);
-    auto initial_data = ufunc::vfrom(cylindrical_explosion());
+    auto initial_data = ufunc::vfrom(atmosphere());
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
 
-    auto x_verts = mesh_vertices(ni, nj, {1, 10, 0, 2 * M_PI});
+    auto x_verts = mesh_vertices(ni, nj, {1, 10, 0, 0.5 * M_PI});
     auto x_cells = mesh_cell_coords(x_verts);
     auto v_cells = mesh_cell_volumes(x_verts);
     auto a_faces_i = mesh_face_areas_i(x_verts);
@@ -509,13 +482,11 @@ int main_2d(int argc, const char* argv[])
 {
     auto cfg  = run_config::from_argv(argc, argv);
     auto wall = 0.0;
-    auto ni   = cfg.ni;
-    auto nj   = cfg.nj;
+    auto ni   = cfg.nr;
+    auto nj   = cfg.nr;
     auto iter = 0;
     auto t    = 0.0;
-    auto dx   = 1.0 / ni;
-    auto dy   = 1.0 / nj;
-    auto dt   = std::min(dx, dy) * 0.125;
+    auto dt   = 0.125; // TODO
     auto database = build_database(ni, nj);
 
 
@@ -556,5 +527,14 @@ int main_2d(int argc, const char* argv[])
 int main(int argc, const char* argv[])
 {
     std::set_terminate(debug::terminate_with_backtrace);
-    return main_2d(argc, argv);
+
+    try {
+        return main_2d(argc, argv);
+    }
+    catch (std::exception& e)
+    {
+        std::cerr << "\nERROR: ";
+        std::cerr << e.what() << "\n\n";
+        return 1;
+    }
 }
