@@ -303,7 +303,7 @@ struct ufunc::detail::Vfunc3
         }
         if (C.shape(ArrayType::rank - 1) != ArgSize3)
         {
-            throw std::invalid_argument("input array B has wrong last-axis size");
+            throw std::invalid_argument("input array C has wrong last-axis size");
         }
         throw_unless_same(drop_last(A.shape()), drop_last(B.shape()));
         throw_unless_same(drop_last(B.shape()), drop_last(C.shape()));

@@ -27,7 +27,7 @@ namespace newtonian_hydro {
 
     using Vars = std::array<double, 5>;
     using Unit = std::array<double, 3>;
-    using Position = std::array<double, 3>;
+    using Position = std::array<double, 2>;
 
     struct cons_to_prim;
     struct prim_to_cons;
@@ -171,9 +171,61 @@ struct newtonian_hydro::riemann_hlle
 // ============================================================================
 struct newtonian_hydro::sph_geom_src_terms
 {
-    inline Vars operator()(Vars /*P*/, Position /*X*/) const
+    inline Vars operator()(Vars P, Position X) const
     {
-        // TODO
-        return Vars();
+        const double r = X[0];
+        const double q = X[1];
+        const double dg = P[0];
+        const double vr = P[1];
+        const double vq = P[2];
+        const double vp = P[3];
+        const double pg = P[4];
+        auto S = Vars();
+
+        S[0] = 0.0;
+        S[1] = (2 * pg + dg * (vq * vq + vp * vp)) / r;
+        S[2] = (pg * cot(q) + dg * (vp * vp * cot(q) - vr * vq)) / r;
+        S[3] = -dg * vp * (vr + vq * cot(q)) / r;
+        S[4] = 0.0;
+
+        return S;
     }
+    double cot(double x) const
+    {
+        return std::tan (M_PI_2 - x);
+    }
+    double gammaLawIndex = 5. / 3;
 };
+
+
+
+
+// struct relativistic_hydro::sph_geom_src_terms
+// {
+//     inline Vars operator()(Vars P, Position X) const
+//     {
+//         const double r = X[0];
+//         const double q = X[1];
+//         const double gm = gammaLawIndex;
+//         const double dg = P[0];
+//         const double vr = P[1];
+//         const double vq = P[2];
+//         const double vp = P[3];
+//         const double pg = P[4];
+//         const double eg = pg / dg / (gm - 1);
+//         const double v2 = vr * vr + vq * vq + vp * vp;
+//         const double W2 = 1.0 / (1.0 - v2);
+//         const double hg = 1.0 + eg + pg / dg;
+//         const double rhohW2 = dg * hg * W2;
+
+//         S[0] = 0.0;
+//         S[1] = (2 * pg + rhohW2 * (vq * vq + vp * vp)) / r;
+//         S[2] = (pg * cot(q) + rhohW2 * (vp * vp * cot(q) - vr * vq)) / r;
+//         S[3] = -rhohW2 * vp * (vr + vq * cot(q)) / r;
+//         S[4] = 0.0;
+
+//         // TODO
+//         return Vars();
+//     }
+//     double gammaLawIndex = 5. / 3;
+// };

@@ -167,153 +167,13 @@ void run_config::print(std::ostream& os) const
 
 
 // ============================================================================
-auto advance_2d(nd::array<double, 3> U0, double dt)
+struct mesh_geometry
 {
-    auto _ = nd::axis::all();
-
-    auto update_formula = [dt] (std::array<double, 9> arg)
-    {
-        double u   = arg[0];
-        double s   = arg[1];
-        double fri = arg[2];
-        double fli = arg[3];
-        double frj = arg[4];
-        double flj = arg[5];
-        double dai = arg[6];
-        double daj = arg[7];
-        double dv  = arg[8];
-        return u + dt * (s - (dai * (fri - fli) + daj * (frj - flj)) / dv);
-    };
-
-    auto gradient_est = ufunc::from(gradient_plm(2.0));
-    auto advance_cons = ufunc::nfrom(update_formula);
-    auto evaluate_src = ufunc::vfrom(newtonian_hydro::sph_geom_src_terms());
-    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
-    auto godunov_flux_i = ufunc::vfrom(newtonian_hydro::riemann_hlle({1, 0, 0}));
-    auto godunov_flux_j = ufunc::vfrom(newtonian_hydro::riemann_hlle({0, 1, 0}));
-    auto extrap_l = ufunc::from([] (double a, double b) { return a - b * 0.5; });
-    auto extrap_r = ufunc::from([] (double a, double b) { return a + b * 0.5; });
-
-    auto mi = U0.shape(0);
-    auto mj = U0.shape(1);
-    auto P0 = cons_to_prim(U0);
-
-    auto Fhi = [&] ()
-    {
-        auto Pa = P0.select(_|0|mi-2, _|2|mj-2, _);
-        auto Pb = P0.select(_|1|mi-1, _|2|mj-2, _);
-        auto Pc = P0.select(_|2|mi-0, _|2|mj-2, _);
-        auto Gb = gradient_est(Pa, Pb, Pc);
-        auto Pl = extrap_l(Pb, Gb);
-        auto Pr = extrap_r(Pb, Gb);
-        auto Fh = godunov_flux_i(Pr.take<0>(_|0|mi-3), Pl.take<0>(_|1|mi-2));
-        return Fh;
-    }();
-
-    auto Fhj = [&] ()
-    {
-        auto Pa = P0.select(_|2|mi-2, _|0|mj-2, _);
-        auto Pb = P0.select(_|2|mi-2, _|1|mj-1, _);
-        auto Pc = P0.select(_|2|mi-2, _|2|mj-0, _);
-        auto Gb = gradient_est(Pa, Pb, Pc);
-        auto Pl = extrap_l(Pb, Gb);
-        auto Pr = extrap_r(Pb, Gb);
-        auto Fh = godunov_flux_j(Pr.take<1>(_|0|mj-3), Pl.take<1>(_|1|mj-2));
-        return Fh;
-    }();
-
-
-    auto X0 = nd::array<double, 3>(P0.shape(0), P0.shape(1), 2); // TODO: put cell-center coords
-    auto dV = nd::array<double, 3>(P0.shape(0), P0.shape(1), 2); // TODO: put cell volumes
-    auto dAi = nd::array<double, 3>(P0.shape(0), P0.shape(1), 2); // TODO: put face areas
-    auto dAj = nd::array<double, 3>(P0.shape(0), P0.shape(1), 2); // TODO: put face areas
-    auto S0 = evaluate_src(P0, X0);
-
-    return advance_cons(std::array<nd::array<double, 3>, 9>
-    {
-        U0.select(_|2|mi-2, _|2|mj-2, _),
-        S0.select(_|2|mi-2, _|2|mj-2, _),
-        Fhi.take<0>(_|1|mi-3),
-        Fhi.take<0>(_|0|mi-4),
-        Fhj.take<1>(_|1|mj-3),
-        Fhj.take<1>(_|0|mj-4),
-        dAi,
-        dAj,
-        dV,
-    });
-}
-
-
-
-
-// ============================================================================
-void update_2d_nothread(Database& database, double dt, double rk_factor)
-{
-    auto results = std::map<Database::Index, Database::Array>();
-
-    for (const auto& patch : database.all(Field::conserved))
-    {
-        auto U = database.fetch(patch.first, 2);
-        results[patch.first].become(advance_2d(U, dt));
-    }
-    for (const auto& res : results)
-    {
-        database.commit(res.first, res.second, rk_factor);
-    }
-}
-
-void update_2d_threaded(Database& database, double dt, double rk_factor)
-{
-    struct ThreadResult
-    {
-        Database::Index index;
-        nd::array<double, 3> U1;
-    };
-
-    auto threads = std::vector<std::thread>();
-    auto futures = std::vector<std::future<ThreadResult>>();
-
-    for (const auto& patch : database.all(Field::conserved))
-    {     
-        auto U = database.fetch(patch.first, 2);
-        auto promise = std::promise<ThreadResult>();
-
-        futures.push_back(promise.get_future());
-        threads.push_back(std::thread([index=patch.first,U,dt] (auto promise)
-        {
-            promise.set_value({index, advance_2d(U, dt)});
-        }, std::move(promise)));
-    }
-
-    for (auto& f : futures)
-    {
-        auto res = f.get();
-        database.commit(res.index, res.U1, rk_factor);
-    }
-
-    for (auto& t : threads)
-    {
-        t.join();
-    }
-}
-
-void update(Database& database, double dt, int rk, int threaded)
-{
-    auto up = threaded ? update_2d_threaded : update_2d_nothread;
-
-    switch (rk)
-    {
-        case 1:
-            up(database, dt, 0.0);
-            break;
-        case 2:
-            up(database, dt, 0.0);
-            up(database, dt, 0.5);
-            break;
-        default:
-            throw std::invalid_argument("rk must be 1 or 2");
-    }
-}
+    nd::array<double, 3> centroids;
+    nd::array<double, 3> volumes;
+    nd::array<double, 3> face_areas_i;
+    nd::array<double, 3> face_areas_j;
+};
 
 
 
@@ -440,17 +300,159 @@ nd::array<double, 3> mesh_face_areas_j(const nd::array<double, 3>& verts)
 }
 
 
+
+
+// ============================================================================
+nd::array<double, 3> pad_with_zeros_j(const nd::array<double, 3>& A)
+{
+    auto _ = nd::axis::all();
+    auto ni = A.shape(0);
+    auto nj = A.shape(1);
+    auto nk = A.shape(2);
+
+    nd::array<double, 3> res(ni, nj + 2, nk);
+
+    res = 0.0;
+    res.select(_, _|1|nj+1, _) = A;
+    return res;
+}
+
+
+
+
+// ============================================================================
+auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
+{
+    auto _ = nd::axis::all();
+
+    auto update_formula = [dt] (std::array<double, 5> u, std::array<double, 5> df, std::array<double, 1> dv)
+    {
+        return std::array<double, 5>{
+            u[0] - dt * df[0] / dv[0],
+            u[1] - dt * df[1] / dv[0],
+            u[2] - dt * df[2] / dv[0],
+            u[3] - dt * df[3] / dv[0],
+            u[4] - dt * df[4] / dv[0],
+        };
+    };
+
+    auto flux_times_area_formula = [] (std::array<double, 5> f, std::array<double, 1> da)
+    {
+        return std::array<double, 5>{
+            f[0] * da[0],
+            f[1] * da[0],
+            f[2] * da[0],
+            f[3] * da[0],
+            f[4] * da[0],
+        };
+    };
+
+    auto gradient_est = ufunc::from(gradient_plm(2.0));
+    auto advance_cons = ufunc::vfrom(update_formula);
+    auto evaluate_src = ufunc::vfrom(newtonian_hydro::sph_geom_src_terms());
+    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
+    auto godunov_flux_i = ufunc::vfrom(newtonian_hydro::riemann_hlle({1, 0, 0}));
+    auto godunov_flux_j = ufunc::vfrom(newtonian_hydro::riemann_hlle({0, 1, 0}));
+    auto extrap_l = ufunc::from([] (double a, double b) { return a - b * 0.5; });
+    auto extrap_r = ufunc::from([] (double a, double b) { return a + b * 0.5; });
+    auto flux_times_area = ufunc::vfrom(flux_times_area_formula);
+
+    auto mi = U0.shape(0);
+    auto mj = U0.shape(1);
+    auto P0 = cons_to_prim(U0);
+
+    auto Fhi = [&] ()
+    {
+        auto Pa = P0.select(_|0|mi-2, _, _);
+        auto Pb = P0.select(_|1|mi-1, _, _);
+        auto Pc = P0.select(_|2|mi-0, _, _);
+        auto Gb = gradient_est(Pa, Pb, Pc);
+        auto Pl = extrap_l(Pb, Gb);
+        auto Pr = extrap_r(Pb, Gb);
+        auto Fh = godunov_flux_i(Pr.take<0>(_|0|mi-3), Pl.take<0>(_|1|mi-2));
+        auto Fa = flux_times_area(Fh, G.face_areas_i);
+        return Fa;
+    }();
+
+    auto Fhj = [&] ()
+    {
+        auto Pa = P0.select(_|2|mi-2, _|0|mj-2, _);
+        auto Pb = P0.select(_|2|mi-2, _|1|mj-1, _);
+        auto Pc = P0.select(_|2|mi-2, _|2|mj-0, _);
+        auto Gb = pad_with_zeros_j(gradient_est(Pa, Pb, Pc));
+        auto Pl = extrap_l(P0.take<0>(_|2|mi-2), Gb);
+        auto Pr = extrap_r(P0.take<0>(_|2|mi-2), Gb);
+        auto Fh = pad_with_zeros_j(godunov_flux_j(Pr.take<1>(_|0|mj-1), Pl.take<1>(_|1|mj)));
+        auto Fa = flux_times_area(Fh, G.face_areas_j);
+        return Fa;
+    }();
+
+    auto dFi = Fhi.take<0>(_|1|mi-3) - Fhi.take<0>(_|0|mi-4);
+    auto dFj = Fhj.take<1>(_|1|mj+1) - Fhj.take<1>(_|0|mj+0);
+    auto dF = dFi + dFj;
+    auto S0 = evaluate_src(P0.take<0>(_|2|mi-2), G.centroids);
+
+    return S0 * dt + advance_cons(U0.take<0>(_|2|mi-2), dF, G.volumes);
+}
+
+
+
+
+// ============================================================================
+void update_2d_nothread(Database& database, double dt, double rk_factor)
+{
+    auto results = std::map<Database::Index, Database::Array>();
+
+    for (const auto& patch : database.all(Field::conserved))
+    {
+        auto U = database.fetch(patch.first, 2, 2, 0, 0);
+        auto G = mesh_geometry();
+
+        G.centroids   .become(database.at(patch.first, Field::cell_coords));
+        G.volumes     .become(database.at(patch.first, Field::cell_volume));
+        G.face_areas_i.become(database.at(patch.first, Field::face_area_i));
+        G.face_areas_j.become(database.at(patch.first, Field::face_area_j));
+
+        results[patch.first].become(advance_2d(U, G, dt));
+    }
+    for (const auto& res : results)
+    {
+        database.commit(res.first, res.second, rk_factor);
+    }
+}
+
+void update(Database& database, double dt, int rk, int /*threaded*/)
+{
+    auto up = update_2d_nothread;
+
+    switch (rk)
+    {
+        case 1:
+            up(database, dt, 0.0);
+            break;
+        case 2:
+            up(database, dt, 0.0);
+            up(database, dt, 0.5);
+            break;
+        default:
+            throw std::invalid_argument("rk must be 1 or 2");
+    }
+}
+
+
+
+
 // ============================================================================
 Database build_database(int ni, int nj)
 {
     auto header = Database::Header
     {
-        {Field::conserved,    {5, MeshLocation::cell}},
-        {Field::vert_coords,  {2, MeshLocation::vert}},
-        {Field::cell_coords,  {2, MeshLocation::cell}},
-        {Field::cell_volume,  {1, MeshLocation::cell}},
-        {Field::face_areas_i, {1, MeshLocation::face_i}},
-        {Field::face_areas_j, {1, MeshLocation::face_j}},
+        {Field::conserved,   {5, MeshLocation::cell}},
+        {Field::vert_coords, {2, MeshLocation::vert}},
+        {Field::cell_coords, {2, MeshLocation::cell}},
+        {Field::cell_volume, {1, MeshLocation::cell}},
+        {Field::face_area_i, {1, MeshLocation::face_i}},
+        {Field::face_area_j, {1, MeshLocation::face_j}},
     };
 
     auto database = Database(ni, nj, header);
@@ -467,8 +469,8 @@ Database build_database(int ni, int nj)
     database.insert(std::make_tuple(0, 0, 0, Field::vert_coords), x_verts);
     database.insert(std::make_tuple(0, 0, 0, Field::cell_coords), x_cells);
     database.insert(std::make_tuple(0, 0, 0, Field::cell_volume), v_cells);
-    database.insert(std::make_tuple(0, 0, 0, Field::face_areas_i), a_faces_i);
-    database.insert(std::make_tuple(0, 0, 0, Field::face_areas_j), a_faces_j);
+    database.insert(std::make_tuple(0, 0, 0, Field::face_area_i), a_faces_i);
+    database.insert(std::make_tuple(0, 0, 0, Field::face_area_j), a_faces_j);
     database.insert(std::make_tuple(0, 0, 0, Field::conserved), U);
 
     return database;
@@ -527,14 +529,15 @@ int main_2d(int argc, const char* argv[])
 int main(int argc, const char* argv[])
 {
     std::set_terminate(debug::terminate_with_backtrace);
+    return main_2d(argc, argv);
 
-    try {
-        return main_2d(argc, argv);
-    }
-    catch (std::exception& e)
-    {
-        std::cerr << "\nERROR: ";
-        std::cerr << e.what() << "\n\n";
-        return 1;
-    }
+    // try {
+    //     return main_2d(argc, argv);
+    // }
+    // catch (std::exception& e)
+    // {
+    //     std::cerr << "\nERROR: ";
+    //     std::cerr << e.what() << "\n\n";
+    //     return 1;
+    // }
 }
