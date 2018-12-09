@@ -1,0 +1,8 @@
+*.nd
+*.h5
+*.o
+*.dSYM
+*.d
+data
+jic
+Makefile.in
