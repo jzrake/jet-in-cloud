@@ -46,11 +46,10 @@ struct gradient_plm
 
 struct atmosphere
 {
-    inline std::array<double, 5> operator()(std::array<double, 2> X) const
+    inline std::array<double, 5> operator()(std::array<double, 2> /*X*/) const
     {
-        auto r = X[0];
-        // auto q = X[1];
-        return std::array<double, 5>{std::pow(r, -2.0), 0.0, 0.0, 0.0, 0.125};
+        // auto r = X[0];
+        return std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 0.125};
     }
 };
 
@@ -325,14 +324,14 @@ auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
 {
     auto _ = nd::axis::all();
 
-    auto update_formula = [dt] (std::array<double, 5> u, std::array<double, 5> df, std::array<double, 1> dv)
+    auto update_formula = [dt] (std::array<double, 5> s, std::array<double, 5> df, std::array<double, 1> dv)
     {
         return std::array<double, 5>{
-            u[0] - dt * df[0] / dv[0],
-            u[1] - dt * df[1] / dv[0],
-            u[2] - dt * df[2] / dv[0],
-            u[3] - dt * df[3] / dv[0],
-            u[4] - dt * df[4] / dv[0],
+            dt * s[0] - dt * df[0] / dv[0],
+            dt * s[1] - dt * df[1] / dv[0],
+            dt * s[2] - dt * df[2] / dv[0],
+            dt * s[3] - dt * df[3] / dv[0],
+            dt * s[4] - dt * df[4] / dv[0],
         };
     };
 
@@ -387,12 +386,21 @@ auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
         return Fa;
     }();
 
+    // for (int i = 0; i < 32; ++i)
+    // {
+    //     std::cout << Fhj(i, 0, 1) << std::endl;
+    //     std::cout << Fhj(i, 32, 1) << std::endl;
+    // }
+    // exit(10);
+
     auto dFi = Fhi.take<0>(_|1|mi-3) - Fhi.take<0>(_|0|mi-4);
     auto dFj = Fhj.take<1>(_|1|mj+1) - Fhj.take<1>(_|0|mj+0);
     auto dF = dFi + dFj;
-    auto S0 = evaluate_src(P0.take<0>(_|2|mi-2), G.centroids);
 
-    return S0 * dt + advance_cons(U0.take<0>(_|2|mi-2), dF, G.volumes);
+    auto S0 = evaluate_src(P0.take<0>(_|2|mi-2), G.centroids);
+    auto L0 = advance_cons(S0, dF, G.volumes);
+
+    return U0.take<0>(_|2|mi-2) + L0 * dt;
 }
 
 
@@ -443,6 +451,47 @@ void update(Database& database, double dt, int rk, int /*threaded*/)
 
 
 // ============================================================================
+nd::array<double, 3> boundary_value(
+    Database::Index,
+    PatchBoundary edge,
+    int depth,
+    const nd::array<double, 3>& patch)
+{
+    auto _ = nd::axis::all();
+
+    switch (edge)
+    {
+        case PatchBoundary::il:
+        {
+            auto res = nd::array<double, 3>(depth, patch.shape(1), 5);
+
+            for (int n = 0; n < 5; ++n)
+            {
+                res.select(0, _, n) = patch.select(0, _, n);
+                res.select(1, _, n) = patch.select(0, _, n);
+            }
+            return res;
+        }
+        case PatchBoundary::ir:
+        {
+            auto res = nd::array<double, 3>(depth, patch.shape(1), 5);
+
+            for (int n = 0; n < 5; ++n)
+            {
+                res.select(0, _, n) = patch.select(patch.shape(0) - 1, _, n);
+                res.select(1, _, n) = patch.select(patch.shape(0) - 1, _, n);
+            }
+            return res;
+        }
+        case PatchBoundary::jl: throw std::logic_error("boundary_value: should not be here");
+        case PatchBoundary::jr: throw std::logic_error("boundary_value: should not be here");
+    }
+}
+
+
+
+
+// ============================================================================
 Database build_database(int ni, int nj)
 {
     auto header = Database::Header
@@ -459,7 +508,7 @@ Database build_database(int ni, int nj)
     auto initial_data = ufunc::vfrom(atmosphere());
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
 
-    auto x_verts = mesh_vertices(ni, nj, {1, 10, 0, 0.5 * M_PI});
+    auto x_verts = mesh_vertices(ni, nj, {1, 10, 0, M_PI});
     auto x_cells = mesh_cell_coords(x_verts);
     auto v_cells = mesh_cell_volumes(x_verts);
     auto a_faces_i = mesh_face_areas_i(x_verts);
@@ -473,6 +522,7 @@ Database build_database(int ni, int nj)
     database.insert(std::make_tuple(0, 0, 0, Field::face_area_j), a_faces_j);
     database.insert(std::make_tuple(0, 0, 0, Field::conserved), U);
 
+    database.set_boundary_value(boundary_value);
     return database;
 }
 
@@ -488,7 +538,7 @@ int main_2d(int argc, const char* argv[])
     auto nj   = cfg.nr;
     auto iter = 0;
     auto t    = 0.0;
-    auto dt   = 0.125; // TODO
+    auto dt   = 0.01; // TODO
     auto database = build_database(ni, nj);
 
 

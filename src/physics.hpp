@@ -194,7 +194,6 @@ struct newtonian_hydro::sph_geom_src_terms
     {
         return std::tan (M_PI_2 - x);
     }
-    double gammaLawIndex = 5. / 3;
 };
 
 
