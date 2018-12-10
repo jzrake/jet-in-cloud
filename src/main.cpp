@@ -61,7 +61,7 @@ struct atmosphere
 // ============================================================================
 void write_database(const Database& database)
 {
-    auto parts = std::vector<std::string>{"data", "chkpt.0000.bt"};
+    auto parts = std::vector<std::string>{"data", "chkpt.0000.jic"};
     filesystem::remove_recurse(filesystem::join(parts));
 
     for (const auto& patch : database)
@@ -72,6 +72,31 @@ void write_database(const Database& database)
         parts.pop_back();
     }
     std::cout << "Write checkpoint " << filesystem::join(parts) << std::endl;
+}
+
+template <typename ConsToPrim>
+void write_database_primitive(const Database& database, ConsToPrim cons_to_prim)
+{
+    auto parts = std::vector<std::string>{"data", "prim.0000.jic"};
+    filesystem::remove_recurse(filesystem::join(parts));
+
+    for (const auto& patch : database.all(Field::conserved))
+    {
+        parts.push_back(to_string(patch.first, "primitive"));
+        filesystem::require_dir(filesystem::parent(filesystem::join(parts)));
+        nd::tofile(cons_to_prim(patch.second), filesystem::join(parts));
+        parts.pop_back();
+    }
+
+    for (const auto& patch : database.all(Field::vert_coords))
+    {
+        parts.push_back(to_string(patch.first));
+        filesystem::require_dir(filesystem::parent(filesystem::join(parts)));
+        nd::tofile(patch.second, filesystem::join(parts));
+        parts.pop_back();
+    }
+
+    std::cout << "Write primitives " << filesystem::join(parts) << std::endl;
 }
 
 
@@ -327,11 +352,11 @@ auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
     auto update_formula = [dt] (std::array<double, 5> s, std::array<double, 5> df, std::array<double, 1> dv)
     {
         return std::array<double, 5>{
-            dt * s[0] - dt * df[0] / dv[0],
-            dt * s[1] - dt * df[1] / dv[0],
-            dt * s[2] - dt * df[2] / dv[0],
-            dt * s[3] - dt * df[3] / dv[0],
-            dt * s[4] - dt * df[4] / dv[0],
+            dt * (s[0] - df[0] / dv[0]),
+            dt * (s[1] - df[1] / dv[0]),
+            dt * (s[2] - df[2] / dv[0]),
+            dt * (s[3] - df[3] / dv[0]),
+            dt * (s[4] - df[4] / dv[0]),
         };
     };
 
@@ -450,13 +475,18 @@ nd::array<double, 3> boundary_value(
     int depth,
     const nd::array<double, 3>& patch)
 {
+    if (depth != 2)
+    {
+        throw std::logic_error("boundary_value: should not be here");
+    }
+
     auto _ = nd::axis::all();
 
     switch (edge)
     {
         case PatchBoundary::il:
         {
-            auto res = nd::array<double, 3>(depth, patch.shape(1), 5);
+            auto res = nd::array<double, 3>(2, patch.shape(1), 5);
 
             for (int n = 0; n < 5; ++n)
             {
@@ -467,13 +497,11 @@ nd::array<double, 3> boundary_value(
         }
         case PatchBoundary::ir:
         {
-            auto res = nd::array<double, 3>(depth, patch.shape(1), 5);
+            auto res = nd::array<double, 3>(2, patch.shape(1), 5);
 
-            for (int n = 0; n < 5; ++n)
-            {
-                res.select(0, _, n) = patch.select(patch.shape(0) - 1, _, n);
-                res.select(1, _, n) = patch.select(patch.shape(0) - 1, _, n);
-            }
+            res.select(0, _, _) = patch.select(patch.shape(0) - 1, _, _);
+            res.select(1, _, _) = patch.select(patch.shape(0) - 1, _, _);
+
             return res;
         }
         case PatchBoundary::jl: throw std::logic_error("boundary_value: should not be here");
@@ -560,7 +588,8 @@ int main_2d(int argc, const char* argv[])
     }
 
     std::printf("average kzps=%f\n", database.num_cells(Field::conserved) / 1e3 / wall * iter);
-    write_database(database);
+    // write_database(database);
+    write_database_primitive(database, ufunc::vfrom(newtonian_hydro::cons_to_prim()));
 
     return 0;
 }

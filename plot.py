@@ -48,8 +48,8 @@ def imshow_database(database):
 
         R = patch['vert_coords'][:,:,0]
         Q = patch['vert_coords'][:,:,1]
-        D = patch['conserved'][:,:,0]
-        pr = patch['conserved'][:,:,1]
+        D = patch['primitive'][:,:,0]
+        V = patch['primitive'][:,:,1]
         X = R * np.cos(Q)
         Y = R * np.sin(Q)
 
