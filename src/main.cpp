@@ -46,10 +46,12 @@ struct gradient_plm
 
 struct atmosphere
 {
-    inline std::array<double, 5> operator()(std::array<double, 2> /*X*/) const
+    inline std::array<double, 5> operator()(std::array<double, 2> X) const
     {
-        // auto r = X[0];
-        return std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 0.125};
+        auto r = X[0];
+        // return std::array<double, 5>{std::pow(r, -2), 0.0, 0.0, 0.0, std::pow(r, -2)};
+        return std::array<double, 5>{r < 2.0 ? 1.0 : 0.1, 0.0, 0.0, 0.0, r < 2.0 ? 1.0 : 0.125};
+        // return std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 1.0};
     }
 };
 
@@ -197,7 +199,7 @@ nd::array<double, 3> mesh_vertices(int ni, int nj, std::array<double, 4> extent)
     return X;
 }
 
-nd::array<double, 3> mesh_cell_coords(const nd::array<double, 3>& verts)
+nd::array<double, 3> mesh_cell_centroids(const nd::array<double, 3>& verts)
 {
     auto centroid_r = ufunc::from([] (double r0, double r1)
     {
@@ -291,7 +293,7 @@ nd::array<double, 3> mesh_face_areas_j(const nd::array<double, 3>& verts)
         auto r1 = extent[1];
         auto q0 = extent[2];
         // auto q1 = extent[3];
-        return (r1 * r1 - r0 * r0) * std::sin(q0) * (p1 - p0);
+        return 0.5 * (r1 + r0) * (r1 - r0) * (p1 - p0) * std::sin(q0);
     });
 
     auto args = std::array<nd::array<double, 3>, 4>{r0, r1, q0, q1};
@@ -309,9 +311,7 @@ nd::array<double, 3> pad_with_zeros_j(const nd::array<double, 3>& A)
     auto nj = A.shape(1);
     auto nk = A.shape(2);
 
-    nd::array<double, 3> res(ni, nj + 2, nk);
-
-    res = 0.0;
+    auto res = nd::ndarray<double, 3>(ni, nj + 2, nk);
     res.select(_, _|1|nj+1, _) = A;
     return res;
 }
@@ -386,21 +386,14 @@ auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
         return Fa;
     }();
 
-    // for (int i = 0; i < 32; ++i)
-    // {
-    //     std::cout << Fhj(i, 0, 1) << std::endl;
-    //     std::cout << Fhj(i, 32, 1) << std::endl;
-    // }
-    // exit(10);
-
     auto dFi = Fhi.take<0>(_|1|mi-3) - Fhi.take<0>(_|0|mi-4);
     auto dFj = Fhj.take<1>(_|1|mj+1) - Fhj.take<1>(_|0|mj+0);
     auto dF = dFi + dFj;
 
     auto S0 = evaluate_src(P0.take<0>(_|2|mi-2), G.centroids);
-    auto L0 = advance_cons(S0, dF, G.volumes);
+    auto dU = advance_cons(S0, dF, G.volumes);
 
-    return U0.take<0>(_|2|mi-2) + L0 * dt;
+    return U0.take<0>(_|2|mi-2) + dU;
 }
 
 
@@ -509,7 +502,7 @@ Database build_database(int ni, int nj)
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
 
     auto x_verts = mesh_vertices(ni, nj, {1, 10, 0, M_PI});
-    auto x_cells = mesh_cell_coords(x_verts);
+    auto x_cells = mesh_cell_centroids(x_verts);
     auto v_cells = mesh_cell_volumes(x_verts);
     auto a_faces_i = mesh_face_areas_i(x_verts);
     auto a_faces_j = mesh_face_areas_j(x_verts);
@@ -538,7 +531,7 @@ int main_2d(int argc, const char* argv[])
     auto nj   = cfg.nr;
     auto iter = 0;
     auto t    = 0.0;
-    auto dt   = 0.01; // TODO
+    auto dt   = 0.001; // TODO
     auto database = build_database(ni, nj);
 
 
@@ -579,15 +572,16 @@ int main_2d(int argc, const char* argv[])
 int main(int argc, const char* argv[])
 {
     std::set_terminate(debug::terminate_with_backtrace);
-    return main_2d(argc, argv);
 
-    // try {
-    //     return main_2d(argc, argv);
-    // }
-    // catch (std::exception& e)
-    // {
-    //     std::cerr << "\nERROR: ";
-    //     std::cerr << e.what() << "\n\n";
-    //     return 1;
-    // }
+    // return main_2d(argc, argv);
+
+    try {
+        return main_2d(argc, argv);
+    }
+    catch (std::exception& e)
+    {
+        std::cerr << "\nERROR: ";
+        std::cerr << e.what() << "\n\n";
+        return 1;
+    }
 }

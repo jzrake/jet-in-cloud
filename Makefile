@@ -16,7 +16,7 @@ THIRD_PARTY += ../third_party/visit_struct/include/visit_struct/visit_struct.hpp
 CXXFLAGS += -std=c++14
 CXXFLAGS += -MMD -MP
 CXXFLAGS += -Wall -Wextra -Wno-missing-braces
-CXXFLAGS += -O0
+CXXFLAGS += -O3
 
 SRC := $(wildcard src/*.cpp)
 OBJ := $(SRC:%.cpp=%.o)

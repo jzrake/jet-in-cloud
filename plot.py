@@ -49,10 +49,12 @@ def imshow_database(database):
         R = patch['vert_coords'][:,:,0]
         Q = patch['vert_coords'][:,:,1]
         D = patch['conserved'][:,:,0]
+        pr = patch['conserved'][:,:,1]
         X = R * np.cos(Q)
         Y = R * np.sin(Q)
 
-        im1 = ax1.pcolormesh(Y, X, np.log10(D), edgecolor='k', lw=0.1)
+        # im1 = ax1.pcolormesh(Y, X, np.log10(D), edgecolor='none', lw=0.1)
+        im1 = ax1.pcolormesh(Y, X, D, edgecolor='none', lw=0.1)#, vmin=0, vmax=1.5)
         fig.colorbar(im1, cax=cax1, orientation='vertical')
 
     ax1.set_title('Log density')

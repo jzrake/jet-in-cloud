@@ -192,7 +192,7 @@ struct newtonian_hydro::sph_geom_src_terms
     }
     double cot(double x) const
     {
-        return std::tan (M_PI_2 - x);
+        return std::tan(M_PI_2 - x);
     }
 };
 
