@@ -1,6 +1,7 @@
 #include <iostream>
 #include <iomanip>
 #include <fstream>
+#include <sstream>
 #include <cmath>
 #include <vector>
 #include <thread>
@@ -29,10 +30,6 @@ static double minmod(double ul, double u0, double ur, double theta)
     return 0.25 * std::fabs(SGN(a) + SGN(b)) * (SGN(a) + SGN(c)) * MIN3ABS(a, b, c);
 }
 
-
-
-
-// ============================================================================
 struct gradient_plm
 {
     gradient_plm(double theta) : theta(theta) {}
@@ -42,17 +39,6 @@ struct gradient_plm
         return minmod(a, b, c, theta);
     }
     double theta;
-};
-
-struct atmosphere
-{
-    inline std::array<double, 5> operator()(std::array<double, 2> X) const
-    {
-        auto r = X[0];
-        return std::array<double, 5>{std::pow(r, -2), 0.0, 0.0, 0.0, 0.01};
-        // return std::array<double, 5>{r < 2.0 ? 1.0 : 0.1, 0.0, 0.0, 0.0, r < 2.0 ? 1.0 : 0.125};
-        // return std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 1.0};
-    }
 };
 
 
@@ -71,12 +57,12 @@ void write_database(const Database& database)
         nd::tofile(patch.second, filesystem::join(parts));
         parts.pop_back();
     }
-    std::cout << "Write checkpoint " << filesystem::join(parts) << std::endl;
+    std::cout << "write checkpoint " << filesystem::join(parts) << std::endl;
 }
 
-template <typename ConsToPrim>
-void write_database_primitive(const Database& database, ConsToPrim cons_to_prim)
+void write_database_primitive(const Database& database)
 {
+    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
     auto parts = std::vector<std::string>{"data", "prim.0000.jic"};
     filesystem::remove_recurse(filesystem::join(parts));
 
@@ -95,13 +81,15 @@ void write_database_primitive(const Database& database, ConsToPrim cons_to_prim)
         nd::tofile(patch.second, filesystem::join(parts));
         parts.pop_back();
     }
-
-    std::cout << "Write primitives " << filesystem::join(parts) << std::endl;
+    std::cout << "write primitives " << filesystem::join(parts) << std::endl;
 }
 
-template <typename ConsToPrim>
-void write_database_to_vtk(const Database& database, std::string filename, ConsToPrim cons_to_prim)
+void write_database_to_vtk(const Database& database, std::string filename)
 {
+    std::cout << "write VTK " << filename << std::endl;
+    filesystem::require_dir(filesystem::parent(filename));
+
+    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
     auto stream = std::fstream(filename, std::ios::out);
     auto vert = database.at(std::make_tuple(0, 0, 0, Field::vert_coords));
 
@@ -121,9 +109,9 @@ void write_database_to_vtk(const Database& database, std::string filename, ConsT
     // ------------------------------------------------------------------------
     stream << "POINTS " << vert.shape(0) * vert.shape(1) << " FLOAT\n";
 
-    for (int i = 0; i < vert.shape(0); ++i)
+    for (int j = 0; j < vert.shape(1); ++j)
     {
-        for (int j = 0; j < vert.shape(1); ++j)
+        for (int i = 0; i < vert.shape(0); ++i)
         {
             const double r = vert(i, j, 0);
             const double q = vert(i, j, 1);
@@ -143,11 +131,22 @@ void write_database_to_vtk(const Database& database, std::string filename, ConsT
     stream << "SCALARS " << "density " << "double " << 1 << "\n";
     stream << "LOOKUP_TABLE default\n";
 
-    for (int i = 0; i < prim.shape(0); ++i)
+    for (int j = 0; j < prim.shape(1); ++j)
     {
-        for (int j = 0; j < prim.shape(1); ++j)
+        for (int i = 0; i < prim.shape(0); ++i)
         {
             stream << prim(i, j, 0) << "\n";
+        }
+    }
+
+    stream << "SCALARS " << "radial_velocity " << "double " << 1 << "\n";
+    stream << "LOOKUP_TABLE default\n";
+
+    for (int j = 0; j < prim.shape(1); ++j)
+    {
+        for (int i = 0; i < prim.shape(0); ++i)
+        {
+            stream << prim(i, j, 1) << "\n";
         }
     }
 }
@@ -159,15 +158,26 @@ void write_database_to_vtk(const Database& database, std::string filename, ConsT
 struct run_config
 {
     void print(std::ostream& os) const;
+    std::string make_vtk_filename(int count) const;
     static run_config from_dict(std::map<std::string, std::string> items);
     static run_config from_argv(int argc, const char* argv[]);
 
-    std::string outdir = ".";
-    double tfinal = 0.0;
-    int rk = 1;
-    int nr = 32;
-    int num_levels = 1;
-    int threaded = 0;
+    /** Run control */
+    std::string outdir = "data";
+    double tfinal      = 0.0;
+    int rk             = 1;
+    int nr             = 32;
+    int num_levels     = 1;
+    int threaded       = 0;
+
+    /** Physics setup */
+    double jet_opening_angle = 0.5;
+    double jet_power         = 1.0;
+    double jet_velocity      = 1.0;
+    double jet_density       = 1.0;
+    double density_index     = 2.0;
+    double ambient_pressure  = 0.01;
+    double outer_radius      = 1.0;
 };
 
 VISITABLE_STRUCT(run_config,
@@ -176,12 +186,42 @@ VISITABLE_STRUCT(run_config,
     rk,
     nr,
     num_levels,
-    threaded);
+    threaded,
+    jet_opening_angle,
+    jet_power,
+    jet_velocity,
+    jet_density,
+    density_index,
+    ambient_pressure,
+    outer_radius);
 
 
 
 
 // ============================================================================
+void run_config::print(std::ostream& os) const
+{
+    using std::left;
+    using std::setw;
+    using std::setfill;
+    using std::showpos;
+    const int W = 24;
+
+    os << std::string(52, '=') << "\n";
+    os << "Config:\n\n";
+
+    std::ios orig(nullptr);
+    orig.copyfmt(os);
+
+    visit_struct::for_each(*this, [&os] (std::string name, auto& value)
+    {
+        os << left << setw(W) << setfill('.') << name + " " << " " << value << "\n";
+    });
+
+    os << "\n";
+    os.copyfmt(orig);
+}
+
 run_config run_config::from_dict(std::map<std::string, std::string> items)
 {
     run_config cfg;
@@ -219,28 +259,38 @@ run_config run_config::from_argv(int argc, const char* argv[])
     return from_dict(cmdline::parse_keyval(argc, argv));
 }
 
-void run_config::print(std::ostream& os) const
+std::string run_config::make_vtk_filename(int count) const
 {
-    using std::left;
-    using std::setw;
-    using std::setfill;
-    using std::showpos;
-    const int W = 24;
-
-    os << std::string(52, '=') << "\n";
-    os << "Config:\n\n";
-
-    std::ios orig(nullptr);
-    orig.copyfmt(os);
-
-    visit_struct::for_each(*this, [&os] (std::string name, auto& value)
-    {
-        os << left << setw(W) << setfill('.') << name + " " << " " << value << "\n";
-    });
-
-    os << "\n";
-    os.copyfmt(orig);
+    auto extension = "vtk";
+    auto ss = std::stringstream();
+    ss << outdir << "/" << "jic";
+    ss << "." << std::setfill('0') << std::setw(4) << count;
+    ss << "." << extension;
+    return ss.str();
 }
+
+
+
+
+// ============================================================================
+struct atmosphere
+{
+    atmosphere(double density_index, double ambient_pressure)
+    : density_index(density_index)
+    , ambient_pressure(ambient_pressure)
+    {
+    }
+
+    inline std::array<double, 5> operator()(std::array<double, 2> X) const
+    {
+        const double r = X[0];
+        const double a = density_index;
+        const double p = ambient_pressure;
+        return std::array<double, 5>{std::pow(r, -a), 0.0, 0.0, 0.0, p};
+    }
+    double density_index;
+    double ambient_pressure;
+};
 
 
 
@@ -500,8 +550,12 @@ void update_2d_nothread(Database& database, double dt, double rk_factor)
     }
 }
 
-void update(Database& database, double dt, int rk, int /*threaded*/)
+void update(Database& database, double dt, int rk, int threaded)
 {
+    if (threaded)
+    {
+        throw std::invalid_argument("threaded update not written yet");
+    }
     auto up = update_2d_nothread;
 
     switch (rk)
@@ -522,52 +576,79 @@ void update(Database& database, double dt, int rk, int /*threaded*/)
 
 
 // ============================================================================
-nd::array<double, 3> boundary_value(
-    Database::Index,
-    PatchBoundary edge,
-    int depth,
-    const nd::array<double, 3>& patch)
+struct boundary_value
 {
-    if (depth != 2)
+    boundary_value(run_config cfg) : cfg(cfg) {}
+
+    nd::array<double, 3> operator()(
+        Database::Index,
+        PatchBoundary edge,
+        int /*depth*/,
+        const nd::array<double, 3>& patch) const
     {
-        throw std::logic_error("boundary_value: should not be here");
+        switch (edge)
+        {
+            case PatchBoundary::il: return inflow_inner(patch);
+            case PatchBoundary::ir: return zero_gradient_outer(patch);
+            case PatchBoundary::jl: return nd::array<double, 3>();
+            case PatchBoundary::jr: return nd::array<double, 3>();
+        }
     }
 
-    auto _ = nd::axis::all();
-
-    switch (edge)
+    nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
     {
-        case PatchBoundary::il:
-        {
-            auto res = nd::array<double, 3>(2, patch.shape(1), 5);
+        auto _ = nd::axis::all();
+        auto res = nd::array<double, 3>(2, patch.shape(1), 5);
+        res.select(0, _, _) = patch.select(patch.shape(0) - 1, _, _);
+        res.select(1, _, _) = patch.select(patch.shape(0) - 1, _, _);
+        return res;
+    }
 
-            for (int n = 0; n < 5; ++n)
+    nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
+    {
+        auto res = nd::array<double, 3>(2, patch.shape(1), 5);
+
+        for (int i = 0; i < 2; ++i)
+        {
+            for (int j = 0; j < patch.shape(1); ++j)
             {
-                res.select(0, _, n) = patch.select(0, _, n);
-                res.select(1, _, n) = patch.select(0, _, n);
+                auto inflowU = jet_inlet(M_PI * (j + 0.5) / patch.shape(1));
+
+                for (int q = 0; q < 5; ++q)
+                {
+                    res(i, j, q) = inflowU[q];
+                }
             }
-            return res;
         }
-        case PatchBoundary::ir:
-        {
-            auto res = nd::array<double, 3>(2, patch.shape(1), 5);
-
-            res.select(0, _, _) = patch.select(patch.shape(0) - 1, _, _);
-            res.select(1, _, _) = patch.select(patch.shape(0) - 1, _, _);
-
-            return res;
-        }
-        case PatchBoundary::jl: throw std::logic_error("boundary_value: should not be here");
-        case PatchBoundary::jr: throw std::logic_error("boundary_value: should not be here");
+        return res;
     }
-}
+
+    newtonian_hydro::Vars jet_inlet(double q) const
+    {
+        auto q0 = 0.0;
+        auto q1 = M_PI;
+        auto u0 = cfg.jet_velocity;
+        auto dg = cfg.jet_density;
+        auto dq = cfg.jet_opening_angle;
+        auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
+        auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
+        auto inflowP = newtonian_hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.ambient_pressure};
+        auto inflowU = newtonian_hydro::prim_to_cons()(inflowP);
+
+        return inflowU;
+    }
+    run_config cfg;
+};
 
 
 
 
 // ============================================================================
-Database build_database(int ni, int nj)
+Database build_database(run_config cfg)
 {
+    auto ni = cfg.nr * std::log10(cfg.outer_radius);
+    auto nj = cfg.nr;
+
     auto header = Database::Header
     {
         {Field::conserved,   {5, MeshLocation::cell}},
@@ -579,10 +660,10 @@ Database build_database(int ni, int nj)
     };
 
     auto database = Database(ni, nj, header);
-    auto initial_data = ufunc::vfrom(atmosphere());
+    auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.ambient_pressure));
     auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
 
-    auto x_verts = mesh_vertices(ni, nj, {1, 10, 0, M_PI});
+    auto x_verts = mesh_vertices(ni, nj, {1, cfg.outer_radius, 0, M_PI});
     auto x_cells = mesh_cell_centroids(x_verts);
     auto v_cells = mesh_cell_volumes(x_verts);
     auto a_faces_i = mesh_face_areas_i(x_verts);
@@ -596,7 +677,7 @@ Database build_database(int ni, int nj)
     database.insert(std::make_tuple(0, 0, 0, Field::face_area_j), a_faces_j);
     database.insert(std::make_tuple(0, 0, 0, Field::conserved), U);
 
-    database.set_boundary_value(boundary_value);
+    database.set_boundary_value(boundary_value(cfg));
     return database;
 }
 
@@ -604,16 +685,14 @@ Database build_database(int ni, int nj)
 
 
 // ============================================================================
-int main_2d(int argc, const char* argv[])
+int run(int argc, const char* argv[])
 {
     auto cfg  = run_config::from_argv(argc, argv);
     auto wall = 0.0;
-    auto ni   = cfg.nr;
-    auto nj   = cfg.nr;
     auto iter = 0;
-    auto t    = 0.0;
+    auto time = 0.0;
     auto dt   = 0.25 * M_PI / cfg.nr;
-    auto database = build_database(ni, nj);
+    auto database = build_database(cfg);
 
 
     // ========================================================================
@@ -623,28 +702,40 @@ int main_2d(int argc, const char* argv[])
     std::cout << std::string(52, '=') << "\n";
     std::cout << "Main loop:\n\n";
 
+    auto scheduler = Scheduler();
+
+    scheduler.repeat("write_vtk", 1.0, [&database, cfg] (double, int count)
+    {
+        write_database_to_vtk(database, cfg.make_vtk_filename(count));
+    });
 
     // ========================================================================
     // Main loop
     // ========================================================================
-    while (t < cfg.tfinal)
+    while (time < cfg.tfinal)
     {
         auto timer = Timer();
+
+        scheduler.dispatch(time);
         update(database, dt, cfg.rk, cfg.threaded);
 
-        t    += dt;
+        time += dt;
         iter += 1;
         wall += timer.seconds();
+
         auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
 
-        std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", iter, t, kzps);
+        scheduler.dispatch(time);
+
+        std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", iter, time, kzps);
     }
+
+    scheduler.dispatch(time);
 
     std::printf("average kzps=%f\n", database.num_cells(Field::conserved) / 1e3 / wall * iter);
 
-    auto c2p = ufunc::vfrom(newtonian_hydro::cons_to_prim());
-    write_database_primitive(database, c2p);
-    write_database_to_vtk(database, "jic.vtk", c2p);
+    // write_database_primitive(database);
+    // write_database_to_vtk(database, "jic.vtk");
 
     return 0;
 }
@@ -655,12 +746,11 @@ int main_2d(int argc, const char* argv[])
 // ============================================================================
 int main(int argc, const char* argv[])
 {
-    std::set_terminate(debug::terminate_with_backtrace);
-
-    // return main_2d(argc, argv);
+    // std::set_terminate(debug::terminate_with_backtrace);
+    // return run(argc, argv);
 
     try {
-        return main_2d(argc, argv);
+        return run(argc, argv);
     }
     catch (std::exception& e)
     {

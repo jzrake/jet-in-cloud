@@ -81,6 +81,16 @@ namespace filesystem
 
 
 // ============================================================================
+namespace debug
+{
+    void backtrace();
+    void terminate_with_backtrace();
+};
+
+
+
+
+// ============================================================================
 class Timer
 {
 public:
@@ -99,8 +109,45 @@ private:
 
 
 // ============================================================================
-namespace debug
+class Scheduler
 {
-    void backtrace();
-    void terminate_with_backtrace();
+public:
+    using Callback = std::function<void(double time, int count)>;
+
+    struct Task
+    {
+        void dispatch(double time)
+        {
+            if (time + 1e-12 > next)
+            {
+                callback(time, count);
+                next += interval;
+                count += 1;
+            }
+        }
+
+        Callback callback;
+        double interval    = 1.0;
+        double next        = 0.0;
+        int    count       = 0;
+        bool   logarithmic = false;
+    };
+
+    void repeat(std::string name, double interval, Callback callback)
+    {
+        Task task;
+        task.interval = interval;
+        task.callback = callback;
+        tasks[name] = task;
+    }
+
+    void dispatch(double time)
+    {
+        for (auto& task : tasks)
+        {
+            task.second.dispatch(time);
+        }
+    }
+private:
+    std::map<std::string, Task> tasks;
 };
