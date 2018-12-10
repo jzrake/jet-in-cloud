@@ -49,8 +49,8 @@ struct atmosphere
     inline std::array<double, 5> operator()(std::array<double, 2> X) const
     {
         auto r = X[0];
-        // return std::array<double, 5>{std::pow(r, -2), 0.0, 0.0, 0.0, std::pow(r, -2)};
-        return std::array<double, 5>{r < 2.0 ? 1.0 : 0.1, 0.0, 0.0, 0.0, r < 2.0 ? 1.0 : 0.125};
+        return std::array<double, 5>{std::pow(r, -2), 0.0, 0.0, 0.0, 0.01};
+        // return std::array<double, 5>{r < 2.0 ? 1.0 : 0.1, 0.0, 0.0, 0.0, r < 2.0 ? 1.0 : 0.125};
         // return std::array<double, 5>{1.0, 0.0, 0.0, 0.0, 1.0};
     }
 };
@@ -97,6 +97,59 @@ void write_database_primitive(const Database& database, ConsToPrim cons_to_prim)
     }
 
     std::cout << "Write primitives " << filesystem::join(parts) << std::endl;
+}
+
+template <typename ConsToPrim>
+void write_database_to_vtk(const Database& database, std::string filename, ConsToPrim cons_to_prim)
+{
+    auto stream = std::fstream(filename, std::ios::out);
+    auto vert = database.at(std::make_tuple(0, 0, 0, Field::vert_coords));
+
+
+    // ------------------------------------------------------------------------
+    // Write header
+    // ------------------------------------------------------------------------
+    stream << "# vtk DataFile Version 3.0\n";
+    stream << "My Data" << "\n";
+    stream << "ASCII\n";
+    stream << "DATASET STRUCTURED_GRID\n";
+    stream << "DIMENSIONS " << vert.shape(0) << " " << vert.shape(1) << " " << 1 << "\n";
+
+
+    // ------------------------------------------------------------------------
+    // Write vertex points
+    // ------------------------------------------------------------------------
+    stream << "POINTS " << vert.shape(0) * vert.shape(1) << " FLOAT\n";
+
+    for (int i = 0; i < vert.shape(0); ++i)
+    {
+        for (int j = 0; j < vert.shape(1); ++j)
+        {
+            const double r = vert(i, j, 0);
+            const double q = vert(i, j, 1);
+            const double x = r * std::sin(q);
+            const double z = r * std::cos(q);
+            stream << x << " " << 0.0 << " " << z << "\n";
+        }
+    }
+
+
+    // ------------------------------------------------------------------------
+    // Write primitive data
+    // ------------------------------------------------------------------------
+    auto cons = database.at(std::make_tuple(0, 0, 0, Field::conserved));
+    auto prim = cons_to_prim(cons);
+    stream << "CELL_DATA " << prim.shape(0) * prim.shape(1) << "\n";
+    stream << "SCALARS " << "density " << "double " << 1 << "\n";
+    stream << "LOOKUP_TABLE default\n";
+
+    for (int i = 0; i < prim.shape(0); ++i)
+    {
+        for (int j = 0; j < prim.shape(1); ++j)
+        {
+            stream << prim(i, j, 0) << "\n";
+        }
+    }
 }
 
 
@@ -559,7 +612,7 @@ int main_2d(int argc, const char* argv[])
     auto nj   = cfg.nr;
     auto iter = 0;
     auto t    = 0.0;
-    auto dt   = 0.001; // TODO
+    auto dt   = 0.25 * M_PI / cfg.nr;
     auto database = build_database(ni, nj);
 
 
@@ -584,12 +637,14 @@ int main_2d(int argc, const char* argv[])
         wall += timer.seconds();
         auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
 
-        std::printf("[%04d] t=%3.2lf kzps=%3.2lf\n", iter, t, kzps);
+        std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", iter, t, kzps);
     }
 
     std::printf("average kzps=%f\n", database.num_cells(Field::conserved) / 1e3 / wall * iter);
-    // write_database(database);
-    write_database_primitive(database, ufunc::vfrom(newtonian_hydro::cons_to_prim()));
+
+    auto c2p = ufunc::vfrom(newtonian_hydro::cons_to_prim());
+    write_database_primitive(database, c2p);
+    write_database_to_vtk(database, "jic.vtk", c2p);
 
     return 0;
 }

@@ -1,8 +1,9 @@
 *.nd
 *.h5
+*.vtk
 *.o
-*.dSYM
 *.d
+*.dSYM
 data
 jic
 Makefile.in
