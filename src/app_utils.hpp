@@ -148,6 +148,18 @@ public:
             task.second.dispatch(time);
         }
     }
+
+    void print(std::ostream& os) const
+    {
+        os << std::string(52, '=') << "\n";
+        os << "Scheduler:\n\n";
+
+        for (const auto& task : tasks)
+        {
+            os << "\t" << task.first << ": every " << task.second.interval << "s\n";
+        }
+        os << "\n";
+    }
 private:
     std::map<std::string, Task> tasks;
 };

@@ -221,7 +221,7 @@ void debug::terminate_with_backtrace()
     catch(std::exception& e)
     {
         std::cout << std::string(52, '=') << std::endl;
-        std::cout << "Uncaught exception: "<< e.what() << std::endl;
+        std::cout << "uncaught exception: "<< e.what() << std::endl;
     }
 
     backtrace();
