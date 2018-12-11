@@ -67,6 +67,69 @@ namespace cmdline
 
 
 // ============================================================================
+namespace formatted_output {
+    template<typename T>
+    static inline std::string to_json_string(const T& val);
+
+    template<>
+    inline std::string to_json_string<int>(const int& val)
+    {
+        return std::to_string(val);
+    }
+
+    template<>
+    inline std::string to_json_string<double>(const double& val)
+    {
+        return std::to_string(val);
+    }
+
+    template<>
+    inline std::string to_json_string<std::string>(const std::string& val)
+    {
+        return "\"" + val + "\"";
+    }
+
+    template<typename Visitable>
+    static inline void print_json(std::ostream& os, Visitable thing)
+    {
+        int n = 0;
+        int size = 0;
+        thing.foreach([&size] (std::string, auto&) {++size;});
+
+        os << "{\n";
+        thing.foreach([size, &n, &os] (std::string name, auto& value)
+        {
+            os << "    \"" << name << "\": " << to_json_string(value) << (++n < size ? "," : "") << "\n";
+        });
+        os << "}\n";
+    }
+
+    template<typename Visitable>
+    static inline void print_dotted(std::ostream& os, Visitable thing)
+    {
+        using std::left;
+        using std::setw;
+        using std::setfill;
+
+        os << std::string(52, '=') << "\n";
+        os << "Config:\n\n";
+
+        std::ios orig(nullptr);
+        orig.copyfmt(os);
+
+        thing.foreach([&os] (std::string name, auto& value)
+        {
+            os << "\t" << left << setw(24) << setfill('.') << name + " " << " " << value << "\n";
+        });
+        os << "\n";
+        os.copyfmt(orig);
+    }
+}
+
+
+
+
+// ============================================================================
 namespace filesystem
 {
     std::vector<std::string> split(std::string path);
@@ -118,7 +181,7 @@ public:
     {
         void dispatch(double time)
         {
-            if (time + 1e-12 > next)
+            if (interval != 0.0 && time + 1e-12 > next)
             {
                 callback(time, count);
                 next += interval;

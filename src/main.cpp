@@ -45,12 +45,42 @@ struct gradient_plm
 
 
 // ============================================================================
+template <typename T>
+std::vector<char> swap_bytes(const std::vector<T>& buffer)
+{
+    auto res = std::vector<char>(buffer.size() * sizeof(T));
+
+    for (std::size_t n = 0; n < buffer.size(); ++n)
+    {
+        const char* src = reinterpret_cast<const char*>(buffer.data()) + n * sizeof(T);
+        char* dst = static_cast<char*>(res.data()) + n * sizeof(T);
+
+        for (unsigned int b = 0; b < sizeof(T); ++b)
+        {
+            dst[sizeof(T) - b - 1] = src[b];
+        }
+    }
+    return res;
+}
+
+template <typename T>
+void write_swapped_bytes_and_clear(std::ostream& os, std::vector<T>& buffer)
+{
+    auto bytes = swap_bytes(buffer);
+    os.write(bytes.data(), bytes.size());
+    buffer.clear();
+}
+
+
+
+
+// ============================================================================
 void write_chkpt(const Database& database, std::string filename)
 {
     std::cout << "write checkpoint " << filename << std::endl;
     auto parts = std::vector<std::string>{filename};
 
-    filesystem::remove_recurse(filesystem::join(parts));
+    filesystem::remove_recurse(filesystem::parent(filename));
 
     for (const auto& patch : database)
     {
@@ -67,7 +97,7 @@ void write_primitive(const Database& database, std::string filename)
     auto parts = std::vector<std::string>{filename};
     auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
 
-    filesystem::remove_recurse(filesystem::join(parts));
+    filesystem::remove_recurse(filesystem::parent(filename));
 
     for (const auto& patch : database.all(Field::conserved))
     {
@@ -84,7 +114,6 @@ void write_primitive(const Database& database, std::string filename)
         nd::tofile(patch.second, filesystem::join(parts));
         parts.pop_back();
     }
-    std::cout << "write primitives " << filesystem::join(parts) << std::endl;
 }
 
 void write_vtk(const Database& database, std::string filename)
@@ -95,6 +124,7 @@ void write_vtk(const Database& database, std::string filename)
     auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
     auto stream = std::fstream(filename, std::ios::out);
     auto vert = database.at(std::make_tuple(0, 0, 0, Field::vert_coords));
+    auto buffer = std::vector<float>();
 
 
     // ------------------------------------------------------------------------
@@ -102,7 +132,7 @@ void write_vtk(const Database& database, std::string filename)
     // ------------------------------------------------------------------------
     stream << "# vtk DataFile Version 3.0\n";
     stream << "My Data" << "\n";
-    stream << "ASCII\n";
+    stream << "BINARY\n";
     stream << "DATASET STRUCTURED_GRID\n";
     stream << "DIMENSIONS " << vert.shape(0) << " " << vert.shape(1) << " " << 1 << "\n";
 
@@ -120,9 +150,13 @@ void write_vtk(const Database& database, std::string filename)
             const double q = vert(i, j, 1);
             const double x = r * std::sin(q);
             const double z = r * std::cos(q);
-            stream << x << " " << 0.0 << " " << z << "\n";
+            buffer.push_back(x);
+            buffer.push_back(0.0);
+            buffer.push_back(z);
+            // stream << x << " " << 0.0 << " " << z << "\n";
         }
     }
+    write_swapped_bytes_and_clear(stream, buffer);
 
 
     // ------------------------------------------------------------------------
@@ -131,27 +165,45 @@ void write_vtk(const Database& database, std::string filename)
     auto cons = database.at(std::make_tuple(0, 0, 0, Field::conserved));
     auto prim = cons_to_prim(cons);
     stream << "CELL_DATA " << prim.shape(0) * prim.shape(1) << "\n";
-    stream << "SCALARS " << "density " << "double " << 1 << "\n";
+
+    stream << "SCALARS " << "density " << "FLOAT " << 1 << "\n";
     stream << "LOOKUP_TABLE default\n";
 
     for (int j = 0; j < prim.shape(1); ++j)
     {
         for (int i = 0; i < prim.shape(0); ++i)
         {
-            stream << prim(i, j, 0) << "\n";
+            // stream << prim(i, j, 0) << "\n";
+            buffer.push_back(prim(i, j, 0));
         }
     }
+    write_swapped_bytes_and_clear(stream, buffer);
 
-    stream << "SCALARS " << "radial_velocity " << "double " << 1 << "\n";
+    stream << "SCALARS " << "radial_velocity " << "FLOAT " << 1 << "\n";
     stream << "LOOKUP_TABLE default\n";
 
     for (int j = 0; j < prim.shape(1); ++j)
     {
         for (int i = 0; i < prim.shape(0); ++i)
         {
-            stream << prim(i, j, 1) << "\n";
+            // stream << prim(i, j, 1) << "\n";
+            buffer.push_back(prim(i, j, 1));
         }
     }
+    write_swapped_bytes_and_clear(stream, buffer);
+
+    stream << "SCALARS " << "pressure " << "FLOAT " << 1 << "\n";
+    stream << "LOOKUP_TABLE default\n";
+
+    for (int j = 0; j < prim.shape(1); ++j)
+    {
+        for (int i = 0; i < prim.shape(0); ++i)
+        {
+            // stream << prim(i, j, 4) << "\n";
+            buffer.push_back(prim(i, j, 4));
+        }
+    }
+    write_swapped_bytes_and_clear(stream, buffer);
 }
 
 
@@ -160,22 +212,35 @@ void write_vtk(const Database& database, std::string filename)
 // ============================================================================
 struct run_config
 {
+    static run_config from_dict(std::map<std::string, std::string> items);
+    static run_config from_argv(int argc, const char* argv[]);
+
     void print(std::ostream& os) const;
+    void tojson(std::ostream& os) const;
     run_config validate() const;
     std::string make_filename_checkpoint(int count) const;
     std::string make_filename_primitive(int count) const;
     std::string make_filename_vtk(int count) const;
-    static run_config from_dict(std::map<std::string, std::string> items);
-    static run_config from_argv(int argc, const char* argv[]);
+
+    template<typename Callable>
+    void foreach(Callable f)
+    {
+        visit_struct::for_each(*this, [f] (std::string name, auto& value)
+        {
+            f(name, value);
+        });
+    }
 
     /** Run control */
     std::string outdir = "data";
-    double tfinal      = 0.1;
-    int rk             = 1;
-    int nr             = 32;
-    int num_levels     = 1;
-    int threaded       = 0;
-    int test_mode      = 0;
+    double tfinal       = 0.1;
+    double cpi          = 1.0;
+    double vtki         = 1.0;
+    int rk              = 1;
+    int nr              = 32;
+    int num_levels      = 1;
+    int threaded        = 0;
+    int test_mode       = 0;
 
     /** Physics setup */
     double jet_opening_angle = 0.5;
@@ -183,13 +248,15 @@ struct run_config
     double jet_velocity      = 1.0;
     double jet_density       = 1.0;
     double density_index     = 2.0;
-    double ambient_pressure  = 0.01;
+    double temperature       = 0.01;
     double outer_radius      = 10.0;
 };
 
 VISITABLE_STRUCT(run_config,
     outdir,
     tfinal,
+    cpi,
+    vtki,
     rk,
     nr,
     num_levels,
@@ -200,7 +267,7 @@ VISITABLE_STRUCT(run_config,
     jet_velocity,
     jet_density,
     density_index,
-    ambient_pressure,
+    temperature,
     outer_radius);
 
 
@@ -209,25 +276,12 @@ VISITABLE_STRUCT(run_config,
 // ============================================================================
 void run_config::print(std::ostream& os) const
 {
-    using std::left;
-    using std::setw;
-    using std::setfill;
-    using std::showpos;
-    const int W = 24;
+    formatted_output::print_dotted(os, *this);
+}
 
-    os << std::string(52, '=') << "\n";
-    os << "Config:\n\n";
-
-    std::ios orig(nullptr);
-    orig.copyfmt(os);
-
-    visit_struct::for_each(*this, [&os] (std::string name, auto& value)
-    {
-        os << "\t" << left << setw(W) << setfill('.') << name + " " << " " << value << "\n";
-    });
-
-    os << "\n";
-    os.copyfmt(orig);
+void run_config::tojson(std::ostream& os) const
+{
+    formatted_output::print_json(os, *this);
 }
 
 run_config run_config::validate() const
@@ -582,9 +636,9 @@ void update(Database& database, double dt, int rk, int threaded)
 // ============================================================================
 struct atmosphere
 {
-    atmosphere(double density_index, double ambient_pressure)
+    atmosphere(double density_index, double temperature)
     : density_index(density_index)
-    , ambient_pressure(ambient_pressure)
+    , temperature(temperature)
     {
     }
 
@@ -592,11 +646,10 @@ struct atmosphere
     {
         const double r = X[0];
         const double a = density_index;
-        const double p = ambient_pressure;
-        return std::array<double, 5>{std::pow(r, -a), 0.0, 0.0, 0.0, p};
+        return std::array<double, 5>{std::pow(r, -a), 0.0, 0.0, 0.0, temperature * std::pow(r, -a)};
     }
     double density_index;
-    double ambient_pressure;
+    double temperature;
 };
 
 
@@ -675,7 +728,7 @@ struct jet_boundary_value
         auto dq = cfg.jet_opening_angle;
         auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
         auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
-        auto inflowP = newtonian_hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.ambient_pressure};
+        auto inflowP = newtonian_hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg};
         return inflowP;
     }
     run_config cfg;
@@ -763,7 +816,7 @@ Database create_database(run_config cfg)
     }
     else
     {
-        auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.ambient_pressure));
+        auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.temperature));
         database.insert(std::make_tuple(0, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
         database.set_boundary_value(jet_boundary_value(cfg));
     }
@@ -778,15 +831,15 @@ Scheduler create_scheduler(run_config cfg, const Database& database)
 {
     auto scheduler = Scheduler();
 
-    scheduler.repeat("write vtk", 0.1, [&database, cfg] (double, int count)
+    scheduler.repeat("write vtk", cfg.vtki, [&database, cfg] (double, int count)
     {
         write_vtk(database, cfg.make_filename_vtk(count));
     });
-    scheduler.repeat("write primitive", 0.5, [&database, cfg] (double, int count)
+    scheduler.repeat("write primitive", 0.0, [&database, cfg] (double, int count)
     {
-        write_chkpt(database, cfg.make_filename_primitive(count));
+        write_primitive(database, cfg.make_filename_primitive(count));
     });
-    scheduler.repeat("write checkpoint", 1.0, [&database, cfg] (double, int count)
+    scheduler.repeat("write checkpoint", cfg.cpi, [&database, cfg] (double, int count)
     {
         write_chkpt(database, cfg.make_filename_checkpoint(count));
     });
@@ -808,6 +861,8 @@ int run(int argc, const char* argv[])
     auto scheduler = create_scheduler(cfg, database);
 
 
+    // ========================================================================
+    // Initial report
     // ========================================================================
     std::cout << "\n";
     cfg.print(std::cout);
@@ -835,7 +890,6 @@ int run(int argc, const char* argv[])
         auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
         std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", iter, time, kzps);
     }
-
     scheduler.dispatch(time);
 
 
