@@ -78,9 +78,9 @@ void write_swapped_bytes_and_clear(std::ostream& os, std::vector<T>& buffer)
 void write_chkpt(const Database& database, std::string filename)
 {
     std::cout << "write checkpoint " << filename << std::endl;
-    auto parts = std::vector<std::string>{filename};
+    filesystem::remove_recurse(filename);
 
-    filesystem::remove_recurse(filesystem::parent(filename));
+    auto parts = std::vector<std::string>{filename};
 
     for (const auto& patch : database)
     {
@@ -94,10 +94,10 @@ void write_chkpt(const Database& database, std::string filename)
 void write_primitive(const Database& database, std::string filename)
 {
     std::cout << "write primitive " << filename << std::endl;
+    filesystem::remove_recurse(filename);
+
     auto parts = std::vector<std::string>{filename};
     auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
-
-    filesystem::remove_recurse(filesystem::parent(filename));
 
     for (const auto& patch : database.all(Field::conserved))
     {
@@ -121,8 +121,8 @@ void write_vtk(const Database& database, std::string filename)
     std::cout << "write VTK " << filename << std::endl;
     filesystem::require_dir(filesystem::parent(filename));
 
-    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
     auto stream = std::fstream(filename, std::ios::out);
+    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
     auto vert = database.at(std::make_tuple(0, 0, 0, Field::vert_coords));
     auto buffer = std::vector<float>();
 
@@ -173,7 +173,6 @@ void write_vtk(const Database& database, std::string filename)
     {
         for (int i = 0; i < prim.shape(0); ++i)
         {
-            // stream << prim(i, j, 0) << "\n";
             buffer.push_back(prim(i, j, 0));
         }
     }
@@ -186,7 +185,6 @@ void write_vtk(const Database& database, std::string filename)
     {
         for (int i = 0; i < prim.shape(0); ++i)
         {
-            // stream << prim(i, j, 1) << "\n";
             buffer.push_back(prim(i, j, 1));
         }
     }
@@ -199,7 +197,6 @@ void write_vtk(const Database& database, std::string filename)
     {
         for (int i = 0; i < prim.shape(0); ++i)
         {
-            // stream << prim(i, j, 4) << "\n";
             buffer.push_back(prim(i, j, 4));
         }
     }
