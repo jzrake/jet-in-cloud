@@ -153,7 +153,6 @@ void write_vtk(const Database& database, std::string filename)
             buffer.push_back(x);
             buffer.push_back(0.0);
             buffer.push_back(z);
-            // stream << x << " " << 0.0 << " " << z << "\n";
         }
     }
     write_swapped_bytes_and_clear(stream, buffer);
