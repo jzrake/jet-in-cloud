@@ -1,5 +1,4 @@
 #include <iostream>
-#include <iomanip>
 #include <fstream>
 #include <sstream>
 #include <cmath>
@@ -14,6 +13,7 @@
 #include "visit_struct.hpp"
 
 using namespace patches2d;
+namespace hydro = sr_hydro;
 
 
 
@@ -97,7 +97,7 @@ void write_primitive(const Database& database, std::string filename)
     filesystem::remove_recurse(filename);
 
     auto parts = std::vector<std::string>{filename};
-    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
+    auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
 
     for (const auto& patch : database.all(Field::conserved))
     {
@@ -122,7 +122,7 @@ void write_vtk(const Database& database, std::string filename)
     filesystem::require_dir(filesystem::parent(filename));
 
     auto stream = std::fstream(filename, std::ios::out);
-    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
+    auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
     auto vert = database.at(std::make_tuple(0, 0, 0, Field::vert_coords));
     auto buffer = std::vector<float>();
 
@@ -530,10 +530,10 @@ auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
 
     auto gradient_est = ufunc::from(gradient_plm(2.0));
     auto advance_cons = ufunc::vfrom(update_formula);
-    auto evaluate_src = ufunc::vfrom(newtonian_hydro::sph_geom_src_terms());
-    auto cons_to_prim = ufunc::vfrom(newtonian_hydro::cons_to_prim());
-    auto godunov_flux_i = ufunc::vfrom(newtonian_hydro::riemann_hlle({1, 0, 0}));
-    auto godunov_flux_j = ufunc::vfrom(newtonian_hydro::riemann_hlle({0, 1, 0}));
+    auto evaluate_src = ufunc::vfrom(hydro::sph_geom_src_terms());
+    auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
+    auto godunov_flux_i = ufunc::vfrom(hydro::riemann_hlle({1, 0, 0}));
+    auto godunov_flux_j = ufunc::vfrom(hydro::riemann_hlle({0, 1, 0}));
     auto extrap_l = ufunc::from([] (double a, double b) { return a - b * 0.5; });
     auto extrap_r = ufunc::from([] (double a, double b) { return a + b * 0.5; });
     auto flux_times_area = ufunc::vfrom(flux_times_area_formula);
@@ -657,7 +657,7 @@ struct explosion
     inline std::array<double, 5> operator()(std::array<double, 2> X) const
     {
         double d = X[0] < 2 ? 1.0 : 0.1;
-        double p = X[0] < 2 ? 1.0 : 0.125;;
+        double p = X[0] < 2 ? 1.0 : 0.125;
         return std::array<double, 5>{d, 0.0, 0.0, 0.0, p};
     }
 };
@@ -696,7 +696,7 @@ struct jet_boundary_value
 
     nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
     {
-        auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
+        auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
         auto P = nd::array<double, 3>(2, patch.shape(1), 5);
 
         for (int i = 0; i < 2; ++i)
@@ -715,7 +715,7 @@ struct jet_boundary_value
         return prim_to_cons(P);
     }
 
-    newtonian_hydro::Vars jet_inlet(double q) const
+    hydro::Vars jet_inlet(double q) const
     {
         auto q0 = 0.0;
         auto q1 = M_PI;
@@ -724,7 +724,7 @@ struct jet_boundary_value
         auto dq = cfg.jet_opening_angle;
         auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
         auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
-        auto inflowP = newtonian_hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg};
+        auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg};
         return inflowP;
     }
     run_config cfg;
@@ -744,7 +744,7 @@ struct simple_boundary_value
     {
         switch (edge)
         {
-            case PatchBoundary::il: return inflow_inner(patch);
+            case PatchBoundary::il: return zero_gradient_inner(patch);
             case PatchBoundary::ir: return zero_gradient_outer(patch);
             case PatchBoundary::jl: return nd::array<double, 3>();
             case PatchBoundary::jr: return nd::array<double, 3>();
@@ -760,14 +760,13 @@ struct simple_boundary_value
         return U;
     }
 
-    nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
+    nd::array<double, 3> zero_gradient_inner(const nd::array<double, 3>& patch) const
     {
-        auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
         auto _ = nd::axis::all();
-        auto P = nd::array<double, 3>(2, patch.shape(1), 5);
-        P.select(_, _, 0) = 1.0;
-        P.select(_, _, 1) = 1.0;
-        return prim_to_cons(P);
+        auto U = nd::array<double, 3>(2, patch.shape(1), 5);
+        U.select(0, _, _) = patch.select(0, _, _);
+        U.select(1, _, _) = patch.select(0, _, _);
+        return U;
     }
 };
 
@@ -791,7 +790,7 @@ Database create_database(run_config cfg)
     };
 
     auto database = Database(ni, nj, header);
-    auto prim_to_cons = ufunc::vfrom(newtonian_hydro::prim_to_cons());
+    auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
     auto x_verts = mesh_vertices(ni, nj, {1, cfg.outer_radius, 0, M_PI});
     auto x_cells = mesh_cell_centroids(x_verts);
     auto v_cells = mesh_cell_volumes(x_verts);
@@ -907,16 +906,16 @@ int run(int argc, const char* argv[])
 // ============================================================================
 int main(int argc, const char* argv[])
 {
-    // std::set_terminate(debug::terminate_with_backtrace);
-    // return run(argc, argv);
+    std::set_terminate(debug::terminate_with_backtrace);
+    return run(argc, argv);
 
-    try {
-        return run(argc, argv);
-    }
-    catch (std::exception& e)
-    {
-        std::cerr << "\nERROR: ";
-        std::cerr << e.what() << "\n\n";
-        return 1;
-    }
+    // try {
+    //     return run(argc, argv);
+    // }
+    // catch (std::exception& e)
+    // {
+    //     std::cerr << "\nERROR: ";
+    //     std::cerr << e.what() << "\n\n";
+    //     return 1;
+    // }
 }
