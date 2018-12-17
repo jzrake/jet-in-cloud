@@ -40,6 +40,28 @@ std::map<std::string, std::string> cmdline::parse_keyval(int argc, const char* a
 
 
 // ============================================================================
+std::vector<std::string> filesystem::listdir(std::string path)
+{
+    std::vector<std::string> res;
+
+    if (auto dir = opendir(path.data()))
+    {
+        while (auto f = readdir(dir))
+        {
+            if (f->d_name[0] != '.')
+            {
+                res.push_back(f->d_name);
+            }
+        }
+        closedir(dir);
+    }
+    else
+    {
+        throw std::invalid_argument("no such directory " + path);
+    }
+    return res;
+}
+
 std::vector<std::string> filesystem::split(std::string path)
 {
     auto remaining = path;
@@ -155,6 +177,28 @@ int filesystem::remove_recurse(std::string path)
         res = rmdir(path.data());
     }
     return res;
+}
+
+bool filesystem::isfile(std::string path)
+{
+    struct stat s;
+
+    if (stat(path.data(), &s) == 0)
+    {
+        return s.st_mode & S_IFREG;
+    }
+    return false;
+}
+
+bool filesystem::isdir(std::string path)
+{
+    struct stat s;
+
+    if (stat(path.data(), &s) == 0)
+    {
+        return s.st_mode & S_IFDIR;
+    }
+    return false;
 }
 
 

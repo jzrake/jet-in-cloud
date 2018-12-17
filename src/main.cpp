@@ -10,36 +10,12 @@
 #include "physics.hpp"
 #include "patches.hpp"
 #include "ufunc.hpp"
-#include "visit_struct.hpp"
+#include "jic.hpp"
 
 using namespace patches2d;
 namespace hydro = sr_hydro;
-
-
-
-
-// ============================================================================
-#define MIN3ABS(a, b, c) std::min(std::min(std::fabs(a), std::fabs(b)), std::fabs(c))
-#define SGN(x) std::copysign(1, x)
-
-static double minmod(double ul, double u0, double ur, double theta)
-{
-    const double a = theta * (u0 - ul);
-    const double b =   0.5 * (ur - ul);
-    const double c = theta * (ur - u0);
-    return 0.25 * std::fabs(SGN(a) + SGN(b)) * (SGN(a) + SGN(c)) * MIN3ABS(a, b, c);
-}
-
-struct gradient_plm
-{
-    gradient_plm(double theta) : theta(theta) {}
-
-    double inline operator()(double a, double b, double c) const
-    {
-        return minmod(a, b, c, theta);
-    }
-    double theta;
-};
+using run_config = jic::run_config;
+using run_status = jic::run_status;
 
 
 
@@ -75,13 +51,27 @@ void write_swapped_bytes_and_clear(std::ostream& os, std::vector<T>& buffer)
 
 
 // ============================================================================
-void write_chkpt(const Database& database, std::string filename)
+void write_chkpt(const Database& database, run_config cfg, run_status sts)
 {
+    auto filename = cfg.make_filename_chkpt(sts.chkpt_count);
     std::cout << "write checkpoint " << filename << std::endl;
-    filesystem::remove_recurse(filename);
 
+    filesystem::remove_recurse(filename);
+    filesystem::require_dir(filename);
     auto parts = std::vector<std::string>{filename};
 
+
+    // Write the run config and status to json
+    // ------------------------------------------------------------------------
+    auto cfg_stream = std::fstream(cfg.make_filename_config(sts.chkpt_count), std::ios::out);
+    auto sts_stream = std::fstream(cfg.make_filename_status(sts.chkpt_count), std::ios::out);
+
+    cfg.tojson(cfg_stream);
+    sts.tojson(sts_stream);
+
+
+    // Write patch data
+    // ------------------------------------------------------------------------
     for (const auto& patch : database)
     {
         parts.push_back(to_string(patch.first));
@@ -91,33 +81,35 @@ void write_chkpt(const Database& database, std::string filename)
     }
 }
 
-void write_primitive(const Database& database, std::string filename)
+void read_chkpt(Database& database, std::string filename)
 {
-    std::cout << "write primitive " << filename << std::endl;
-    filesystem::remove_recurse(filename);
+    auto path = std::vector<std::string>{filename};
 
-    auto parts = std::vector<std::string>{filename};
-    auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
-
-    for (const auto& patch : database.all(Field::conserved))
+    for (auto patch : filesystem::listdir(filename))
     {
-        parts.push_back(to_string(patch.first, "primitive"));
-        filesystem::require_dir(filesystem::parent(filesystem::join(parts)));
-        nd::tofile(cons_to_prim(patch.second), filesystem::join(parts));
-        parts.pop_back();
-    }
+        path.push_back(patch);
 
-    for (const auto& patch : database.all(Field::vert_coords))
-    {
-        parts.push_back(to_string(patch.first));
-        filesystem::require_dir(filesystem::parent(filesystem::join(parts)));
-        nd::tofile(patch.second, filesystem::join(parts));
-        parts.pop_back();
+        if (filesystem::isdir(filesystem::join(path)))
+        {
+            for (auto field : filesystem::listdir(filesystem::join(path)))
+            {
+                path.push_back(field);
+                auto ifs = std::ifstream(filesystem::join(path));
+                auto str = std::string(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+                auto data = nd::array<double, 3>::loads(str);
+                auto index = patches2d::parse_index(filesystem::join({patch, field}));
+                database.insert(index, data);
+                path.pop_back();
+            }
+        }
+        path.pop_back();
     }
 }
 
-void write_vtk(const Database& database, std::string filename)
+void write_vtk(const Database& database, run_config cfg, run_status sts)
 {
+    auto filename = cfg.make_filename_vtk(sts.vtk_count);
+
     std::cout << "write VTK " << filename << std::endl;
     filesystem::require_dir(filesystem::parent(filename));
 
@@ -200,150 +192,6 @@ void write_vtk(const Database& database, std::string filename)
         }
     }
     write_swapped_bytes_and_clear(stream, buffer);
-}
-
-
-
-
-// ============================================================================
-struct run_config
-{
-    static run_config from_dict(std::map<std::string, std::string> items);
-    static run_config from_argv(int argc, const char* argv[]);
-
-    void print(std::ostream& os) const;
-    void tojson(std::ostream& os) const;
-    run_config validate() const;
-    std::string make_filename_checkpoint(int count) const;
-    std::string make_filename_primitive(int count) const;
-    std::string make_filename_vtk(int count) const;
-
-    template<typename Callable>
-    void foreach(Callable f)
-    {
-        visit_struct::for_each(*this, [f] (std::string name, auto& value)
-        {
-            f(name, value);
-        });
-    }
-
-    /** Run control */
-    std::string outdir = "data";
-    double tfinal       = 0.1;
-    double cpi          = 1.0;
-    double vtki         = 1.0;
-    int rk              = 1;
-    int nr              = 32;
-    int num_levels      = 1;
-    int threaded        = 0;
-    int test_mode       = 0;
-
-    /** Physics setup */
-    double jet_opening_angle = 0.5;
-    double jet_power         = 1.0;
-    double jet_velocity      = 1.0;
-    double jet_density       = 1.0;
-    double density_index     = 2.0;
-    double temperature       = 0.01;
-    double outer_radius      = 10.0;
-};
-
-VISITABLE_STRUCT(run_config,
-    outdir,
-    tfinal,
-    cpi,
-    vtki,
-    rk,
-    nr,
-    num_levels,
-    threaded,
-    test_mode,
-    jet_opening_angle,
-    jet_power,
-    jet_velocity,
-    jet_density,
-    density_index,
-    temperature,
-    outer_radius);
-
-
-
-
-// ============================================================================
-void run_config::print(std::ostream& os) const
-{
-    formatted_output::print_dotted(os, *this);
-}
-
-void run_config::tojson(std::ostream& os) const
-{
-    formatted_output::print_json(os, *this);
-}
-
-run_config run_config::validate() const
-{
-    if (nr < 4)             throw std::runtime_error("nr must be >= 4");
-    if (rk != 1 && rk != 2) throw std::runtime_error("rk must be 1 or 2");
-    if (outer_radius < 2.0) throw std::runtime_error("outer_radius must be > 2");
-    return *this;
-}
-
-run_config run_config::from_dict(std::map<std::string, std::string> items)
-{
-    run_config cfg;
-
-    visit_struct::for_each(cfg, [items] (const char* name, auto& value)
-    {
-        if (items.find(name) != items.end())
-        {
-            cmdline::set_from_string(items.at(name), value);
-        }
-    });
-
-    for (const auto& item : items)
-    {
-        bool found = false;
-
-        visit_struct::for_each(cfg, [item, &found] (const char* name, auto&)
-        {
-            if (item.first == name)
-            {
-                found = true;;
-            }
-        });
-
-        if (! found)
-        {
-            throw std::runtime_error("unrecognized option: " + item.first);
-        }
-    }
-    return cfg;
-}
-
-run_config run_config::from_argv(int argc, const char* argv[])
-{
-    return from_dict(cmdline::parse_keyval(argc, argv));
-}
-
-std::string run_config::make_filename_checkpoint(int count) const
-{
-    auto ss = std::stringstream();
-    ss << "chkpt." << std::setfill('0') << std::setw(4) << count;
-    return filesystem::join({outdir, ss.str()});
-}
-
-std::string run_config::make_filename_primitive(int count) const
-{
-    auto ss = std::stringstream();
-    ss << "primitive." << std::setfill('0') << std::setw(4) << count;
-    return filesystem::join({outdir, ss.str()});
-}
-
-std::string run_config::make_filename_vtk(int count) const
-{
-    auto ss = std::stringstream();
-    ss << std::setfill('0') << std::setw(4) << count << ".vtk";
-    return filesystem::join({outdir, ss.str()});
 }
 
 
@@ -497,6 +345,32 @@ nd::array<double, 3> pad_with_zeros_j(const nd::array<double, 3>& A)
     res.select(_, _|1|nj+1, _) = A;
     return res;
 }
+
+
+
+
+// ============================================================================
+#define MIN3ABS(a, b, c) std::min(std::min(std::fabs(a), std::fabs(b)), std::fabs(c))
+#define SGN(x) std::copysign(1, x)
+
+static double minmod(double ul, double u0, double ur, double theta)
+{
+    const double a = theta * (u0 - ul);
+    const double b =   0.5 * (ur - ul);
+    const double c = theta * (ur - u0);
+    return 0.25 * std::fabs(SGN(a) + SGN(b)) * (SGN(a) + SGN(c)) * MIN3ABS(a, b, c);
+}
+
+struct gradient_plm
+{
+    gradient_plm(double theta) : theta(theta) {}
+
+    double inline operator()(double a, double b, double c) const
+    {
+        return minmod(a, b, c, theta);
+    }
+    double theta;
+};
 
 
 
@@ -774,12 +648,9 @@ struct simple_boundary_value
 
 
 // ============================================================================
-Database create_database(run_config cfg)
+Database::Header create_header()
 {
-    auto ni = cfg.nr * std::log10(cfg.outer_radius);
-    auto nj = cfg.nr;
-
-    auto header = Database::Header
+    return Database::Header
     {
         {Field::conserved,   {5, MeshLocation::cell}},
         {Field::vert_coords, {2, MeshLocation::vert}},
@@ -788,33 +659,55 @@ Database create_database(run_config cfg)
         {Field::face_area_i, {1, MeshLocation::face_i}},
         {Field::face_area_j, {1, MeshLocation::face_j}},
     };
+}
 
-    auto database = Database(ni, nj, header);
-    auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
-    auto x_verts = mesh_vertices(ni, nj, {1, cfg.outer_radius, 0, M_PI});
-    auto x_cells = mesh_cell_centroids(x_verts);
-    auto v_cells = mesh_cell_volumes(x_verts);
-    auto a_faces_i = mesh_face_areas_i(x_verts);
-    auto a_faces_j = mesh_face_areas_j(x_verts);
+Database create_database(run_config cfg)
+{
+    auto ni = cfg.nr * std::log10(cfg.outer_radius);
+    auto nj = cfg.nr;
+    auto database = Database(ni, nj, create_header());
 
-    database.insert(std::make_tuple(0, 0, 0, Field::vert_coords), x_verts);
-    database.insert(std::make_tuple(0, 0, 0, Field::cell_coords), x_cells);
-    database.insert(std::make_tuple(0, 0, 0, Field::cell_volume), v_cells);
-    database.insert(std::make_tuple(0, 0, 0, Field::face_area_i), a_faces_i);
-    database.insert(std::make_tuple(0, 0, 0, Field::face_area_j), a_faces_j);
-
-    if (cfg.test_mode)
+    if (! cfg.restart.empty())
     {
-        auto initial_data = ufunc::vfrom(explosion());
-        database.insert(std::make_tuple(0, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
-        database.set_boundary_value(simple_boundary_value());
+        read_chkpt(database, cfg.restart);
     }
     else
     {
-        auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.temperature));
-        database.insert(std::make_tuple(0, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
+        auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
+        auto x_verts = mesh_vertices(ni, nj, {1, cfg.outer_radius, 0, M_PI});
+        auto x_cells = mesh_cell_centroids(x_verts);
+        auto v_cells = mesh_cell_volumes(x_verts);
+        auto a_faces_i = mesh_face_areas_i(x_verts);
+        auto a_faces_j = mesh_face_areas_j(x_verts);
+
+        database.insert(std::make_tuple(0, 0, 0, Field::vert_coords), x_verts);
+        database.insert(std::make_tuple(0, 0, 0, Field::cell_coords), x_cells);
+        database.insert(std::make_tuple(0, 0, 0, Field::cell_volume), v_cells);
+        database.insert(std::make_tuple(0, 0, 0, Field::face_area_i), a_faces_i);
+        database.insert(std::make_tuple(0, 0, 0, Field::face_area_j), a_faces_j);
+
+        if (cfg.test_mode)
+        {
+            auto initial_data = ufunc::vfrom(explosion());
+            database.insert(std::make_tuple(0, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
+            
+        }
+        else
+        {
+            auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.temperature));
+            database.insert(std::make_tuple(0, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
+        }
+    }
+
+    if (cfg.test_mode)
+    {
+        database.set_boundary_value(simple_boundary_value());       
+    }
+    else
+    {
         database.set_boundary_value(jet_boundary_value(cfg));
     }
+
     return database;
 }
 
@@ -822,21 +715,20 @@ Database create_database(run_config cfg)
 
 
 // ============================================================================
-Scheduler create_scheduler(run_config cfg, const Database& database)
+Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& database)
 {
     auto scheduler = Scheduler();
 
-    scheduler.repeat("write vtk", cfg.vtki, [&database, cfg] (double, int count)
+    scheduler.repeat("write vtk", cfg.vtki, sts.vtk_count, [&cfg, &sts, &database] (double, int count)
     {
-        write_vtk(database, cfg.make_filename_vtk(count));
+        sts.vtk_count = count;
+        write_vtk(database, cfg, sts);
     });
-    scheduler.repeat("write primitive", 0.0, [&database, cfg] (double, int count)
+
+    scheduler.repeat("write checkpoint", cfg.cpi, sts.chkpt_count, [&cfg, &sts, &database] (double, int count)
     {
-        write_primitive(database, cfg.make_filename_primitive(count));
-    });
-    scheduler.repeat("write checkpoint", cfg.cpi, [&database, cfg] (double, int count)
-    {
-        write_chkpt(database, cfg.make_filename_checkpoint(count));
+        sts.chkpt_count = count;
+        write_chkpt(database, cfg, sts);
     });
     return scheduler;
 }
@@ -847,21 +739,20 @@ Scheduler create_scheduler(run_config cfg, const Database& database)
 // ============================================================================
 int run(int argc, const char* argv[])
 {
-    auto cfg  = run_config::from_argv(argc, argv).validate();
-    auto wall = 0.0;
-    auto iter = 0;
-    auto time = 0.0;
-    auto dt   = 0.25 * M_PI / cfg.nr;
+    auto cfg = run_config::from_argv(argc, argv).validate();
+    auto sts = run_status::from_file(cfg.make_filename_status());
     auto database  = create_database(cfg);
-    auto scheduler = create_scheduler(cfg, database);
+    auto scheduler = create_scheduler(cfg, sts, database);
+    auto dt = 0.25 * M_PI / cfg.nr;
 
 
     // ========================================================================
     // Initial report
     // ========================================================================
     std::cout << "\n";
-    cfg.print(std::cout);
-    database.print(std::cout);
+    cfg      .print(std::cout);
+    sts      .print(std::cout);
+    database .print(std::cout);
     scheduler.print(std::cout);
 
     std::cout << std::string(52, '=') << "\n";
@@ -871,21 +762,21 @@ int run(int argc, const char* argv[])
     // ========================================================================
     // Main loop
     // ========================================================================
-    while (time < cfg.tfinal)
+    while (sts.time < cfg.tfinal)
     {
-        scheduler.dispatch(time);
+        scheduler.dispatch(sts.time);
 
         auto timer = Timer();
         update(database, dt, cfg.rk, cfg.threaded);
 
-        time += dt;
-        iter += 1;
-        wall += timer.seconds();
+        sts.time += dt;
+        sts.iter += 1;
+        sts.wall += timer.seconds();
 
         auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
-        std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", iter, time, kzps);
+        std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", sts.iter, sts.time, kzps);
     }
-    scheduler.dispatch(time);
+    scheduler.dispatch(sts.time);
 
 
     // ========================================================================
@@ -894,7 +785,7 @@ int run(int argc, const char* argv[])
     std::cout << "\n";
     std::cout << std::string(52, '=') << "\n";
     std::cout << "Run completed:\n\n";
-    std::printf("\taverage kzps=%f\n", database.num_cells(Field::conserved) / 1e3 / wall * iter);
+    std::printf("\taverage kzps=%f\n", database.num_cells(Field::conserved) / 1e3 / sts.wall * sts.iter);
     std::cout << "\n";
 
     return 0;
@@ -906,8 +797,8 @@ int run(int argc, const char* argv[])
 // ============================================================================
 int main(int argc, const char* argv[])
 {
-    // std::set_terminate(debug::terminate_with_backtrace);
-    // return run(argc, argv);
+    std::set_terminate(debug::terminate_with_backtrace);
+    return run(argc, argv);
 
     try {
         return run(argc, argv);

@@ -106,14 +106,14 @@ namespace formatted_output {
     }
 
     template<typename Visitable>
-    static inline void print_dotted(std::ostream& os, Visitable thing)
+    static inline void print_dotted(std::ostream& os, std::string header, Visitable thing)
     {
         using std::left;
         using std::setw;
         using std::setfill;
 
         os << std::string(52, '=') << "\n";
-        os << "Config:\n\n";
+        os << header << ":\n\n";
 
         std::ios orig(nullptr);
         orig.copyfmt(os);
@@ -133,12 +133,15 @@ namespace formatted_output {
 // ============================================================================
 namespace filesystem
 {
+    std::vector<std::string> listdir(std::string path);
     std::vector<std::string> split(std::string path);
     std::string join(std::vector<std::string> parts);
     std::string extension(std::string path);
     std::string parent(std::string path);
     void require_dir(std::string path);
     int remove_recurse(std::string path);
+    bool isfile(std::string path);
+    bool isdir(std::string path);
 }
 
 
@@ -197,11 +200,12 @@ public:
         bool   logarithmic = false;
     };
 
-    void repeat(std::string name, double interval, Callback callback)
+    void repeat(std::string name, double interval, int initial_count, Callback callback)
     {
         Task task;
         task.interval = interval;
         task.callback = callback;
+        task.count    = initial_count;
         tasks[name] = task;
     }
 
