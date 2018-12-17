@@ -248,33 +248,33 @@ struct sr_hydro::cons_to_prim
     {
         const double gm  = gammaLawIndex;
         const double D   = U[DDD];
-        const double Tau = U[TAU];
-        const double S2  = U[S11] * U[S11] + U[S22] * U[S22] + U[S33] * U[S33];
+        const double tau = U[TAU];
+        const double SS  = U[S11] * U[S11] + U[S22] * U[S22] + U[S33] * U[S33];
 
         int soln_found = 0;
         int n_iter = 0;
         double f;
         double g;
-        double W_soln = 1.0;
+        double W0 = 1.0;
         double p = 1.0; // guess pressure
 
         while (! soln_found)
         {
-            double v2  = S2 / std::pow(Tau + D + p, 2);
+            double v2  = SS / std::pow(tau + D + p, 2);
             double W2  = 1.0 / (1.0 - v2);
             double W   = std::sqrt(W2);
-            double e   = (Tau + D * (1.0 - W) + p * (1.0 - W2)) / (D * W);
-            double Rho = D / W;
-            double h   = 1.0 + e + p / Rho;
-            double cs2 = gm * p / (Rho * h);
+            double e   = (tau + D * (1.0 - W) + p * (1.0 - W2)) / (D * W);
+            double rho = D / W;
+            double h   = 1.0 + e + p / rho;
+            double cs2 = gm * p / (rho * h);
 
-            f = Rho * e * (gm - 1.0) - p;
+            f = rho * e * (gm - 1.0) - p;
             g = v2 * cs2 - 1.0;
             p -= f / g;
 
             if (std::fabs(f) < errorTolerance)
             {
-                W_soln = W;
+                W0 = W;
                 soln_found = 1;
             }
             if (++n_iter == newtonIterMax)
@@ -285,11 +285,11 @@ struct sr_hydro::cons_to_prim
 
         auto P = Vars();
 
-        P[RHO] = D / W_soln;
+        P[RHO] = D / W0;
         P[PRE] = p;
-        P[V11] = U[S11] / (Tau + D + p);
-        P[V22] = U[S22] / (Tau + D + p);
-        P[V33] = U[S33] / (Tau + D + p);
+        P[V11] = U[S11] / (tau + D + p);
+        P[V22] = U[S22] / (tau + D + p);
+        P[V33] = U[S33] / (tau + D + p);
 
         if (P[PRE] < 0.0)
         {
@@ -299,7 +299,7 @@ struct sr_hydro::cons_to_prim
         {
             throw std::invalid_argument("c2p failure: negative density U=" + to_string(U));
         }
-        if (W_soln != W_soln || W_soln > maxW)
+        if (W0 != W0 || W0 > maxW)
         {
             throw std::invalid_argument("c2p failure: nan W U=" + to_string(U));
         }
@@ -307,7 +307,7 @@ struct sr_hydro::cons_to_prim
     }
 
     const int newtonIterMax = 50;
-    const double errorTolerance = 1e-12;
+    const double errorTolerance = 1e-9;
     const double maxW = 1e12;
     const double gammaLawIndex = 4. / 3;
 };

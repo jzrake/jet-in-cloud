@@ -906,16 +906,16 @@ int run(int argc, const char* argv[])
 // ============================================================================
 int main(int argc, const char* argv[])
 {
-    std::set_terminate(debug::terminate_with_backtrace);
-    return run(argc, argv);
+    // std::set_terminate(debug::terminate_with_backtrace);
+    // return run(argc, argv);
 
-    // try {
-    //     return run(argc, argv);
-    // }
-    // catch (std::exception& e)
-    // {
-    //     std::cerr << "\nERROR: ";
-    //     std::cerr << e.what() << "\n\n";
-    //     return 1;
-    // }
+    try {
+        return run(argc, argv);
+    }
+    catch (std::exception& e)
+    {
+        std::cerr << "\nERROR: ";
+        std::cerr << e.what() << "\n\n";
+        return 1;
+    }
 }
