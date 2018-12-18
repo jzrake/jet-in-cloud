@@ -57,7 +57,6 @@ private:
 inline ThreadPool::ThreadPool(std::size_t num_threads)
 : stop(false)
 {
-    // the constructor just launches some amount of workers
     for (std::size_t i = 0; i < num_threads; ++i)
     {
         workers.emplace_back([this]
@@ -109,7 +108,6 @@ auto ThreadPool::enqueue(F&& f, Args&&... args) -> std::future<typename std::res
     {
         std::unique_lock<std::mutex> lock(queue_mutex);
 
-        // don't allow enqueueing after stopping the pool
         if (stop)
         {
             throw std::runtime_error("enqueue on stopped ThreadPool");

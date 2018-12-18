@@ -11,11 +11,14 @@
 #include "patches.hpp"
 #include "ufunc.hpp"
 #include "jic.hpp"
+#include "thread_pool.hpp"
 
 using namespace patches2d;
 namespace hydro = sr_hydro;
 using run_config = jic::run_config;
 using run_status = jic::run_status;
+
+#define RADIAL_BLOCK_COUNT 12
 
 
 
@@ -115,7 +118,7 @@ void write_vtk(const Database& database, run_config cfg, run_status sts)
 
     auto stream = std::fstream(filename, std::ios::out);
     auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
-    auto vert = database.assemble(0, 4, 0, 1, 0, Field::vert_coords);
+    auto vert = database.assemble(0, RADIAL_BLOCK_COUNT, 0, 1, 0, Field::vert_coords);
     auto buffer = std::vector<float>();
 
 
@@ -153,7 +156,7 @@ void write_vtk(const Database& database, run_config cfg, run_status sts)
     // ------------------------------------------------------------------------
     // Write primitive data
     // ------------------------------------------------------------------------
-    auto cons = database.assemble(0, 4, 0, 1, 0, Field::conserved);
+    auto cons = database.assemble(0, RADIAL_BLOCK_COUNT, 0, 1, 0, Field::conserved);
     auto prim = cons_to_prim(cons);
     stream << "CELL_DATA " << prim.shape(0) * prim.shape(1) << "\n";
 
@@ -200,10 +203,22 @@ void write_vtk(const Database& database, run_config cfg, run_status sts)
 // ============================================================================
 struct mesh_geometry
 {
-    nd::array<double, 3> centroids;
-    nd::array<double, 3> volumes;
-    nd::array<double, 3> face_areas_i;
-    nd::array<double, 3> face_areas_j;
+    mesh_geometry(
+        const nd::array<double, 3>& A,
+        const nd::array<double, 3>& B,
+        const nd::array<double, 3>& C,
+        const nd::array<double, 3>& D)
+    : centroids(A)
+    , volumes(B)
+    , face_areas_i(C)
+    , face_areas_j(D)
+    {
+    }
+
+    const nd::array<double, 3>& centroids;
+    const nd::array<double, 3>& volumes;
+    const nd::array<double, 3>& face_areas_i;
+    const nd::array<double, 3>& face_areas_j;
 };
 
 
@@ -456,44 +471,71 @@ auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
 
 
 // ============================================================================
-void update_2d_nothread(Database& database, double dt, double rk_factor)
+// void update_2d_nothread(Database& database, double dt, double rk_factor)
+// {
+//     auto results = std::map<Database::Index, Database::Array>();
+
+//     for (const auto& patch : database.all(Field::conserved))
+//     {
+//         auto U = database.fetch(patch.first, 2, 2, 0, 0);
+//         auto G = mesh_geometry(
+//             database.at(patch.first, Field::cell_coords),
+//             database.at(patch.first, Field::cell_volume),
+//             database.at(patch.first, Field::face_area_i),
+//             database.at(patch.first, Field::face_area_j));
+
+//         results[patch.first].become(advance_2d(U, G, dt));
+//     }
+//     for (const auto& res : results)
+//     {
+//         database.commit(res.first, res.second, rk_factor);
+//     }
+// }
+
+void update_2d_threaded(Database& database, double dt, double rk_factor, int num_threads)
 {
-    auto results = std::map<Database::Index, Database::Array>();
+    using Result = std::pair<Database::Index, Database::Array>;
+    ThreadPool pool(num_threads);
+    std::vector<std::future<Result>> futures;
+
+    auto update_task = [] (
+        Database::Index index,
+        const Database::Array& U,
+        const mesh_geometry& G,
+        double dt)
+    {
+        return std::make_pair(index, advance_2d(U, G, dt));
+    };
 
     for (const auto& patch : database.all(Field::conserved))
     {
         auto U = database.fetch(patch.first, 2, 2, 0, 0);
-        auto G = mesh_geometry();
+        auto G = mesh_geometry(
+            database.at(patch.first, Field::cell_coords),
+            database.at(patch.first, Field::cell_volume),
+            database.at(patch.first, Field::face_area_i),
+            database.at(patch.first, Field::face_area_j));
 
-        G.centroids   .become(database.at(patch.first, Field::cell_coords));
-        G.volumes     .become(database.at(patch.first, Field::cell_volume));
-        G.face_areas_i.become(database.at(patch.first, Field::face_area_i));
-        G.face_areas_j.become(database.at(patch.first, Field::face_area_j));
-
-        results[patch.first].become(advance_2d(U, G, dt));
+        futures.push_back(pool.enqueue(update_task, patch.first, U, G, dt));
     }
-    for (const auto& res : results)
+
+    for (auto& future : futures)
     {
-        database.commit(res.first, res.second, rk_factor);
+        auto result = future.get();
+        database.commit(result.first, result.second, rk_factor);
     }
 }
 
-void update(Database& database, double dt, int rk, int threaded)
+void update(Database& database, double dt, int rk, int num_threads)
 {
-    if (threaded)
-    {
-        throw std::invalid_argument("threaded update not written yet");
-    }
-    auto up = update_2d_nothread;
-
     switch (rk)
     {
         case 1:
-            up(database, dt, 0.0);
+            update_2d_threaded(database, dt, 0.0, num_threads);
             break;
         case 2:
-            up(database, dt, 0.0);
-            up(database, dt, 0.5);
+            update_2d_threaded(database, dt, 0.0, num_threads);
+            update_2d_threaded(database, dt, 0.5, num_threads);
             break;
         default:
             throw std::invalid_argument("rk must be 1 or 2");
@@ -665,7 +707,7 @@ Database::Header create_header()
 
 Database create_database(run_config cfg)
 {
-    auto radial_block_count = 4;
+    auto radial_block_count = RADIAL_BLOCK_COUNT;
     auto target_radial_zone_count = cfg.nr * std::log10(cfg.outer_radius);
     auto block_size = target_radial_zone_count / radial_block_count;
 
@@ -787,7 +829,7 @@ int run(int argc, const char* argv[])
         scheduler.dispatch(sts.time);
 
         auto timer = Timer();
-        update(database, dt, cfg.rk, cfg.threaded);
+        update(database, dt, cfg.rk, cfg.num_threads);
 
         sts.time += dt;
         sts.iter += 1;
@@ -795,7 +837,6 @@ int run(int argc, const char* argv[])
 
         auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
         std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", sts.iter, sts.time, kzps);
-
     }
     scheduler.dispatch(sts.time);
 

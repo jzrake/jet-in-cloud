@@ -78,13 +78,13 @@ struct jic::run_config
     int rk              = 1;
     int nr              = 32;
     int num_levels      = 1;
-    int threaded        = 0;
+    int num_threads     = 1;
     int test_mode       = 0;
 
     /** Physics setup */
     double jet_opening_angle = 0.5;
     double jet_velocity      = 0.9;
-    double jet_density       = 1.0;
+    double jet_density       = 0.01;
     double density_index     = 2.0;
     double temperature       = 0.01;
     double outer_radius      = 10.0;
