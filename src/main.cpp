@@ -115,7 +115,6 @@ void write_vtk(const Database& database, run_config cfg, run_status sts)
 
     auto stream = std::fstream(filename, std::ios::out);
     auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
-    //auto vert = database.at(std::make_tuple(0, 0, 0, Field::vert_coords));
     auto vert = database.assemble(0, 4, 0, 1, 0, Field::vert_coords);
     auto buffer = std::vector<float>();
 
@@ -154,7 +153,6 @@ void write_vtk(const Database& database, run_config cfg, run_status sts)
     // ------------------------------------------------------------------------
     // Write primitive data
     // ------------------------------------------------------------------------
-    // auto cons = database.at(std::make_tuple(0, 0, 0, Field::conserved));
     auto cons = database.assemble(0, 4, 0, 1, 0, Field::conserved);
     auto prim = cons_to_prim(cons);
     stream << "CELL_DATA " << prim.shape(0) * prim.shape(1) << "\n";
@@ -711,30 +709,6 @@ Database create_database(run_config cfg)
                 database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
             }
         }
-
-        // auto x_verts = mesh_vertices(ni, nj, {1, cfg.outer_radius, 0, M_PI});
-        // auto x_cells = mesh_cell_centroids(x_verts);
-        // auto v_cells = mesh_cell_volumes(x_verts);
-        // auto a_faces_i = mesh_face_areas_i(x_verts);
-        // auto a_faces_j = mesh_face_areas_j(x_verts);
-
-        // database.insert(std::make_tuple(0, 0, 0, Field::vert_coords), x_verts);
-        // database.insert(std::make_tuple(0, 0, 0, Field::cell_coords), x_cells);
-        // database.insert(std::make_tuple(0, 0, 0, Field::cell_volume), v_cells);
-        // database.insert(std::make_tuple(0, 0, 0, Field::face_area_i), a_faces_i);
-        // database.insert(std::make_tuple(0, 0, 0, Field::face_area_j), a_faces_j);
-
-        // if (cfg.test_mode)
-        // {
-        //     auto initial_data = ufunc::vfrom(explosion());
-        //     database.insert(std::make_tuple(0, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
-            
-        // }
-        // else
-        // {
-        //     auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.temperature));
-        //     database.insert(std::make_tuple(0, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
-        // }
     }
 
     if (cfg.test_mode)
@@ -756,18 +730,24 @@ Database create_database(run_config cfg)
 Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& database)
 {
     auto scheduler = Scheduler();
-
-    scheduler.repeat("write vtk", cfg.vtki, sts.vtk_count, [&cfg, &sts, &database] (double, int count)
+    auto task_vtk = [&cfg, &sts, &database] (int count, bool dry)
     {
         sts.vtk_count = count;
-        write_vtk(database, cfg, sts);
-    });
-
-    scheduler.repeat("write checkpoint", cfg.cpi, sts.chkpt_count, [&cfg, &sts, &database] (double, int count)
+        if (! dry) write_vtk(database, cfg, sts);
+    };
+    auto task_chkpt = [&cfg, &sts, &database] (int count, bool dry)
     {
         sts.chkpt_count = count;
-        write_chkpt(database, cfg, sts);
-    });
+        if (! dry) write_chkpt(database, cfg, sts);
+    };
+
+    scheduler.repeat("write vtk", cfg.vtki, sts.vtk_count, task_vtk);
+    scheduler.repeat("write checkpoint", cfg.cpi, sts.chkpt_count, task_chkpt);
+
+    if (! cfg.restart.empty())
+    {
+        scheduler.dispatch_dry(sts.time);
+    }
     return scheduler;
 }
 
@@ -778,7 +758,7 @@ Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& dat
 int run(int argc, const char* argv[])
 {
     auto cfg = run_config::from_argv(argc, argv).validate();
-    auto sts = run_status::from_file(cfg.make_filename_status());
+    auto sts = run_status::from_config(cfg);
     auto database  = create_database(cfg);
     auto scheduler = create_scheduler(cfg, sts, database);
     auto dt = 0.25 * M_PI / cfg.nr;
@@ -813,6 +793,7 @@ int run(int argc, const char* argv[])
 
         auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
         std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", sts.iter, sts.time, kzps);
+
     }
     scheduler.dispatch(sts.time);
 

@@ -34,11 +34,12 @@ VISITABLE_STRUCT(run_config,
 // ============================================================================
 run_status run_status::from_file(std::string filename)
 {
-    if (! filesystem::isfile(filename))
-    {
-        return run_status();
-    }
     auto ifs = std::ifstream(filename);
+
+    if (! ifs.is_open())
+    {
+        throw std::runtime_error("missing status file: " + filename);
+    }
     return from_json(ifs);
 }
 
@@ -54,6 +55,15 @@ run_status run_status::from_json(std::istream& is)
         value = j[name];
     });
     return status;
+}
+
+run_status run_status::from_config(const run_config& cfg)
+{
+    if (cfg.restart.empty())
+    {
+        return run_status();
+    }
+    return from_file(filesystem::join({cfg.restart, "status.json"}));
 }
 
 void run_status::print(std::ostream& os) const
@@ -175,10 +185,6 @@ run_config run_config::from_argv(int argc, const char* argv[])
 
 std::string run_config::make_filename_chkpt(int count) const
 {
-    if (count == -1)
-    {
-        return restart;
-    }
     auto ss = std::stringstream();
     ss << "chkpt." << std::setfill('0') << std::setw(4) << count;
     return filesystem::join({outdir, ss.str()});

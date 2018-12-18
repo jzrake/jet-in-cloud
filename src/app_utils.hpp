@@ -179,41 +179,51 @@ private:
 class Scheduler
 {
 public:
-    using Callback = std::function<void(double time, int count)>;
+    using Callback = std::function<void(int count, bool dry)>;
 
     struct Task
     {
-        void dispatch(double time)
+        void dispatch(double t, bool dry=false)
         {
-            if (interval != 0.0 && time + 1e-12 > next)
+            if (interval != 0.0 && t + 1e-12 > next)
             {
-                callback(time, count);
+                callback(count, dry);
                 next += interval;
                 count += 1;
             }
         }
 
         Callback callback;
+        std::string name;
         double interval    = 1.0;
         double next        = 0.0;
         int    count       = 0;
-        bool   logarithmic = false;
     };
 
     void repeat(std::string name, double interval, int initial_count, Callback callback)
     {
         Task task;
-        task.interval = interval;
         task.callback = callback;
+        task.name     = name;
+        task.interval = interval;
+        task.next     = initial_count * interval;
         task.count    = initial_count;
-        tasks[name] = task;
+        tasks.push_back(task);
     }
 
-    void dispatch(double time)
+    void dispatch(double t)
     {
         for (auto& task : tasks)
         {
-            task.second.dispatch(time);
+            task.dispatch(t);
+        }
+    }
+
+    void dispatch_dry(double t)
+    {
+        for (auto& task : tasks)
+        {
+            task.dispatch(t, true);
         }
     }
 
@@ -224,10 +234,11 @@ public:
 
         for (const auto& task : tasks)
         {
-            os << "\t" << task.first << ": every " << task.second.interval << "s\n";
+            os << "\t" << task.name << ": every " << task.interval << "s\n";
         }
         os << "\n";
     }
+
 private:
-    std::map<std::string, Task> tasks;
+    std::vector<Task> tasks;
 };

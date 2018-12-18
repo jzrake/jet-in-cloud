@@ -20,6 +20,7 @@ struct jic::run_status
 {
     static run_status from_file(std::string restart);
     static run_status from_json(std::istream& is);
+    static run_status from_config(const run_config& cfg);
 
     void print(std::ostream& os) const;
     void tojson(std::ostream& os) const;
@@ -56,8 +57,8 @@ struct jic::run_config
     run_config validate() const;
     std::string make_filename_chkpt(int count) const;
     std::string make_filename_vtk(int count) const;
-    std::string make_filename_status(int count=-1) const;
-    std::string make_filename_config(int count=-1) const;
+    std::string make_filename_status(int count) const;
+    std::string make_filename_config(int count) const;
 
     template<typename Callable>
     void foreach(Callable f)
