@@ -1,11 +1,15 @@
 #include <sstream>
 #include <iomanip>
 #include <vector>
-#include <libunwind.h>
 #include <cxxabi.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/stat.h>
+
+#ifdef HAVE_LIBUNWIND
+#include <libunwind.h>
+#endif // HAVE_LIBUNWIND
+
 #include "app_utils.hpp"
 
 
@@ -207,6 +211,7 @@ bool filesystem::isdir(std::string path)
 // ============================================================================
 void debug::backtrace()
 {
+#ifdef HAVE_LIBUNWIND
     std::cout << std::string(52, '=') << std::endl;
     std::cout << "Backtrace:\n";
     std::cout << std::string(52, '=') << std::endl;
@@ -250,6 +255,7 @@ void debug::backtrace()
             std::printf(" -- error: unable to obtain symbol name for this frame\n");
         }
     }
+#endif // HAVE_LIBUNWIND
 }
 
 void debug::terminate_with_backtrace()

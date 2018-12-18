@@ -1,7 +1,11 @@
-#include <fstream>
-#include <iostream>
 #include <iomanip>
+#include <fstream>
+#include <istream>
+#include <iostream>
+#include <iterator>
+#include <functional>
 #include <map>
+#include <cstring>
 
 
 

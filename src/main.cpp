@@ -557,6 +557,7 @@ struct jet_boundary_value
             case PatchBoundary::jl: return nd::array<double, 3>();
             case PatchBoundary::jr: return nd::array<double, 3>();
         }
+	throw;
     }
 
     nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
@@ -623,6 +624,7 @@ struct simple_boundary_value
             case PatchBoundary::jl: return nd::array<double, 3>();
             case PatchBoundary::jr: return nd::array<double, 3>();
         }
+	throw;
     }
 
     nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
