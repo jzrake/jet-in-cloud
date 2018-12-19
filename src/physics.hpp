@@ -292,7 +292,7 @@ struct sr_hydro::cons_to_prim
         P[V22] = U[S22] / (tau + D + p);
         P[V33] = U[S33] / (tau + D + p);
 
-        if (P[PRE] < 0.0)
+        if (P[PRE] < 0.0 && ! allowNegativePressure)
         {
             throw std::invalid_argument("c2p failure: negative pressure U=" + to_string(U));
         }
@@ -300,7 +300,7 @@ struct sr_hydro::cons_to_prim
         {
             throw std::invalid_argument("c2p failure: negative density U=" + to_string(U));
         }
-        if (W0 != W0 || W0 > maxW)
+        if (std::isnan(W0))
         {
             throw std::invalid_argument("c2p failure: nan W U=" + to_string(U));
         }
@@ -308,9 +308,10 @@ struct sr_hydro::cons_to_prim
     }
 
     const int newtonIterMax = 50;
-    const double errorTolerance = 1e-9;
+    const double errorTolerance = 1e-10;
     const double maxW = 1e12;
     const double gammaLawIndex = 4. / 3;
+    const bool allowNegativePressure = true;
 };
 
 
@@ -374,7 +375,7 @@ struct sr_hydro::prim_to_eval
         const double gm0 = gammaLawIndex;
         const double gm1 = gammaLawIndex - 1.0;
         const double d   = P[RHO];
-        const double p   = P[PRE];
+        const double p   = std::max(0.0, P[PRE]);
         const double e   = p / (d * gm1);
         const double h   = 1.0 + e + p / d;
         const double cs2 = gm0 * p / (d * h);
