@@ -52,7 +52,17 @@ run_status run_status::from_json(std::istream& is)
 
     visit_struct::for_each(status, [j] (const char* name, auto& value)
     {
-        value = j[name];
+        try {
+            value = j.at(name);
+        }
+        catch (std::exception& e) {
+            std::cout
+            << "warning: run_status json is missing member "
+            << name
+            << ", using default: "
+            << value
+            << std::endl;
+        }
     });
     return status;
 }
@@ -119,7 +129,17 @@ run_config run_config::from_json(std::istream& is)
 
     visit_struct::for_each(cfg, [j] (const char* name, auto& value)
     {
-        value = j[name];
+        try {
+            value = j.at(name);
+        }
+        catch (std::exception& e) {
+            std::cout
+            << "warning: run_config json is missing member "
+            << name
+            << ", using default: "
+            << value
+            << std::endl;
+        }
     });
     return cfg;
 }
