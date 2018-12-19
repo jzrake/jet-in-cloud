@@ -183,15 +183,17 @@ private:
 class Scheduler
 {
 public:
-    using Callback = std::function<void(int count, bool dry)>;
+    using Callback = std::function<void(int count)>;
+
+    Scheduler(double initial_time) : initial_time(initial_time) {}
 
     struct Task
     {
-        void dispatch(double t, bool dry=false)
+        void dispatch(double t)
         {
             if (interval != 0.0 && t + 1e-12 > next)
             {
-                callback(count, dry);
+                callback(count);
                 next += interval;
                 count += 1;
             }
@@ -210,7 +212,7 @@ public:
         task.callback = callback;
         task.name     = name;
         task.interval = interval;
-        task.next     = initial_count * interval;
+        task.next     = initial_time + (initial_count == 0 ? 0 : interval);
         task.count    = initial_count;
         tasks.push_back(task);
     }
@@ -220,14 +222,6 @@ public:
         for (auto& task : tasks)
         {
             task.dispatch(t);
-        }
-    }
-
-    void dispatch_dry(double t)
-    {
-        for (auto& task : tasks)
-        {
-            task.dispatch(t, true);
         }
     }
 
@@ -244,5 +238,6 @@ public:
     }
 
 private:
+    double initial_time;
     std::vector<Task> tasks;
 };

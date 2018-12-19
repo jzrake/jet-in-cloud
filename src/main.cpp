@@ -54,9 +54,9 @@ void write_swapped_bytes_and_clear(std::ostream& os, std::vector<T>& buffer)
 
 
 // ============================================================================
-void write_chkpt(const Database& database, run_config cfg, run_status sts)
+void write_chkpt(const Database& database, run_config cfg, run_status sts, int count)
 {
-    auto filename = cfg.make_filename_chkpt(sts.chkpt_count);
+    auto filename = cfg.make_filename_chkpt(count);
     std::cout << "write checkpoint " << filename << std::endl;
 
     filesystem::remove_recurse(filename);
@@ -66,8 +66,8 @@ void write_chkpt(const Database& database, run_config cfg, run_status sts)
 
     // Write the run config and status to json
     // ------------------------------------------------------------------------
-    auto cfg_stream = std::fstream(cfg.make_filename_config(sts.chkpt_count), std::ios::out);
-    auto sts_stream = std::fstream(cfg.make_filename_status(sts.chkpt_count), std::ios::out);
+    auto cfg_stream = std::fstream(cfg.make_filename_config(count), std::ios::out);
+    auto sts_stream = std::fstream(cfg.make_filename_status(count), std::ios::out);
 
     cfg.tojson(cfg_stream);
     sts.tojson(sts_stream);
@@ -109,9 +109,9 @@ void load_patches_from_chkpt(Database& database, std::string filename)
     }
 }
 
-void write_vtk(const Database& database, run_config cfg, run_status sts)
+void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int count)
 {
-    auto filename = cfg.make_filename_vtk(sts.vtk_count);
+    auto filename = cfg.make_filename_vtk(count);
 
     std::cout << "write VTK " << filename << std::endl;
     filesystem::require_dir(filesystem::parent(filename));
@@ -768,25 +768,23 @@ Database create_database(run_config cfg)
 // ============================================================================
 Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& database)
 {
-    auto scheduler = Scheduler();
-    auto task_vtk = [&cfg, &sts, &database] (int count, bool dry)
+    auto scheduler = Scheduler(sts.time);
+
+    auto task_vtk = [&cfg, &sts, &database] (int count)
     {
-        sts.vtk_count = count;
-        if (! dry) write_vtk(database, cfg, sts);
+        sts.vtk_count = count + 1;
+        write_vtk(database, cfg, sts, count);
     };
-    auto task_chkpt = [&cfg, &sts, &database] (int count, bool dry)
+
+    auto task_chkpt = [&cfg, &sts, &database] (int count)
     {
-        sts.chkpt_count = count;
-        if (! dry) write_chkpt(database, cfg, sts);
+        sts.chkpt_count = count + 1;
+        write_chkpt(database, cfg, sts, count);
     };
 
     scheduler.repeat("write vtk", cfg.vtki, sts.vtk_count, task_vtk);
     scheduler.repeat("write checkpoint", cfg.cpi, sts.chkpt_count, task_chkpt);
 
-    if (! cfg.restart.empty())
-    {
-        scheduler.dispatch_dry(sts.time);
-    }
     return scheduler;
 }
 
