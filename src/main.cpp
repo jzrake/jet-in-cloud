@@ -498,11 +498,7 @@ void update_2d_threaded(Database& database, double dt, double rk_factor, int num
     ThreadPool pool(num_threads);
     std::vector<std::future<Result>> futures;
 
-    auto update_task = [] (
-        Database::Index index,
-        const Database::Array& U,
-        const mesh_geometry& G,
-        double dt)
+    auto update_task = [] (auto index, const auto& U, const auto& G, auto dt)
     {
         return std::make_pair(index, advance_2d(U, G, dt));
     };
@@ -515,7 +511,6 @@ void update_2d_threaded(Database& database, double dt, double rk_factor, int num
             database.at(patch.first, Field::cell_volume),
             database.at(patch.first, Field::face_area_i),
             database.at(patch.first, Field::face_area_j));
-
         futures.push_back(pool.enqueue(update_task, patch.first, U, G, dt));
     }
 
