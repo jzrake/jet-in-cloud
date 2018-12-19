@@ -77,8 +77,8 @@ struct jic::run_config
     double vtki         = 1.0;
     int rk              = 1;
     int nr              = 32;
-    int num_levels      = 1;
     int num_threads     = 1;
+    int num_blocks      = 12;
     int test_mode       = 0;
 
     /** Physics setup */

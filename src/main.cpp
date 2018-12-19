@@ -18,8 +18,6 @@ namespace hydro = sr_hydro;
 using run_config = jic::run_config;
 using run_status = jic::run_status;
 
-#define RADIAL_BLOCK_COUNT 12
-
 
 
 
@@ -118,7 +116,7 @@ void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int
 
     auto stream = std::fstream(filename, std::ios::out);
     auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
-    auto vert = database.assemble(0, RADIAL_BLOCK_COUNT, 0, 1, 0, Field::vert_coords);
+    auto vert = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::vert_coords);
     auto buffer = std::vector<float>();
 
 
@@ -156,7 +154,7 @@ void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int
     // ------------------------------------------------------------------------
     // Write primitive data
     // ------------------------------------------------------------------------
-    auto cons = database.assemble(0, RADIAL_BLOCK_COUNT, 0, 1, 0, Field::conserved);
+    auto cons = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::conserved);
     auto prim = cons_to_prim(cons);
     stream << "CELL_DATA " << prim.shape(0) * prim.shape(1) << "\n";
 
@@ -702,9 +700,8 @@ Database::Header create_header()
 
 Database create_database(run_config cfg)
 {
-    auto radial_block_count = RADIAL_BLOCK_COUNT;
     auto target_radial_zone_count = cfg.nr * std::log10(cfg.outer_radius);
-    auto block_size = target_radial_zone_count / radial_block_count;
+    auto block_size = target_radial_zone_count / cfg.num_blocks;
 
     auto ni = block_size;
     auto nj = cfg.nr;
@@ -719,10 +716,10 @@ Database create_database(run_config cfg)
     {
         auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
 
-        for (int i = 0; i < radial_block_count; ++i)
+        for (int i = 0; i < cfg.num_blocks; ++i)
         {
-            double r0 = std::pow(cfg.outer_radius, double(i + 0) / radial_block_count);
-            double r1 = std::pow(cfg.outer_radius, double(i + 1) / radial_block_count);
+            double r0 = std::pow(cfg.outer_radius, double(i + 0) / cfg.num_blocks);
+            double r1 = std::pow(cfg.outer_radius, double(i + 1) / cfg.num_blocks);
 
             auto x_verts = mesh_vertices(ni, nj, {r0, r1, 0, M_PI});
             auto x_cells = mesh_cell_centroids(x_verts);
