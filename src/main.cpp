@@ -199,9 +199,9 @@ void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int
 
 
 // ============================================================================
-struct mesh_geometry
+struct MeshGeometry
 {
-    mesh_geometry(
+    MeshGeometry(
         const nd::array<double, 3>& A,
         const nd::array<double, 3>& B,
         const nd::array<double, 3>& C,
@@ -389,7 +389,7 @@ struct gradient_plm
 
 
 // ============================================================================
-auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
+auto advance_2d(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 {
     auto _ = nd::axis::all();
 
@@ -476,7 +476,7 @@ auto advance_2d(nd::array<double, 3> U0, const mesh_geometry& G, double dt)
 //     for (const auto& patch : database.all(Field::conserved))
 //     {
 //         auto U = database.fetch(patch.first, 2, 2, 0, 0);
-//         auto G = mesh_geometry(
+//         auto G = MeshGeometry(
 //             database.at(patch.first, Field::cell_coords),
 //             database.at(patch.first, Field::cell_volume),
 //             database.at(patch.first, Field::face_area_i),
@@ -496,7 +496,8 @@ void update_2d_threaded(Database& database, double dt, double rk_factor, int num
     ThreadPool pool(num_threads);
     std::vector<std::future<Result>> futures;
 
-    auto update_task = [] (auto index, const auto& U, const auto& G, auto dt)
+    auto update_task = [] (Database::Index index, const Database::Array& U,
+			   const MeshGeometry& G, double dt)
     {
         return std::make_pair(index, advance_2d(U, G, dt));
     };
@@ -504,7 +505,7 @@ void update_2d_threaded(Database& database, double dt, double rk_factor, int num
     for (const auto& patch : database.all(Field::conserved))
     {
         auto U = database.fetch(patch.first, 2, 2, 0, 0);
-        auto G = mesh_geometry(
+        auto G = MeshGeometry(
             database.at(patch.first, Field::cell_coords),
             database.at(patch.first, Field::cell_volume),
             database.at(patch.first, Field::face_area_i),
