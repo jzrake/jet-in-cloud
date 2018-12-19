@@ -837,6 +837,7 @@ int run(int argc, const char* argv[])
 
         auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
         std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", sts.iter, sts.time, kzps);
+        std::fflush(stdout);
     }
     scheduler.dispatch(sts.time);
 
@@ -859,8 +860,8 @@ int run(int argc, const char* argv[])
 // ============================================================================
 int main(int argc, const char* argv[])
 {
-    std::set_terminate(debug::terminate_with_backtrace);
-    return run(argc, argv);
+    // std::set_terminate(debug::terminate_with_backtrace);
+    // return run(argc, argv);
 
     try {
         return run(argc, argv);

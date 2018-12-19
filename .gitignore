@@ -4,7 +4,9 @@
 *.o
 *.d
 *.dSYM
-data
+.DS_Store
 jic
 Makefile.in
-.DS_Store
+data
+media
+frames

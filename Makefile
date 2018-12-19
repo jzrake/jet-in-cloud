@@ -38,7 +38,7 @@ post-build: main-build
 	@find src -type l -delete
 
 $(EXE): $(OBJ)
-	$(CXX) -o $@ $^
+	$(CXX) -o $@ $^ $(LDFLAGS)
 
 clean:
 	$(RM) $(OBJ) $(DEP) $(EXE)
