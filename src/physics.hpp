@@ -265,11 +265,11 @@ struct sr_hydro::cons_to_prim
             double W2  = 1.0 / (1.0 - v2);
             double W   = std::sqrt(W2);
             double e   = (tau + D * (1.0 - W) + p * (1.0 - W2)) / (D * W);
-            double rho = D / W;
-            double h   = 1.0 + e + p / rho;
-            double cs2 = gm * p / (rho * h);
+            double d   = D / W;
+            double h   = 1.0 + e + p / d;
+            double cs2 = gm * p / (d * h);
 
-            f = rho * e * (gm - 1.0) - p;
+            f = d * e * (gm - 1.0) - p;
             g = v2 * cs2 - 1.0;
             p -= f / g;
 
@@ -372,7 +372,12 @@ struct sr_hydro::prim_to_eval
     inline Vars operator()(Vars P, Unit N) const
     {
         const double gm0 = gammaLawIndex;
-        const double cs2 = gm0 * P[PRE] / P[RHO];
+        const double gm1 = gammaLawIndex - 1.0;
+        const double d   = P[RHO];
+        const double p   = P[PRE];
+        const double e   = p / (d * gm1);
+        const double h   = 1.0 + e + p / d;
+        const double cs2 = gm0 * p / (d * h);
         const double vn  = P[V11] * N[0]   + P[V22] * N[1]   + P[V33] * N[2];
         const double vv  = P[V11] * P[V11] + P[V22] * P[V22] + P[V33] * P[V33];
         const double v2  = vn * vn;
