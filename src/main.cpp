@@ -490,11 +490,10 @@ auto advance_2d(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 //     }
 // }
 
-void update_2d_threaded(Database& database, double dt, double rk_factor, int num_threads)
+void update_2d_threaded(ThreadPool& pool, Database& database, double dt, double rk_factor)
 {
     using Result = std::pair<Database::Index, Database::Array>;
-    ThreadPool pool(num_threads);
-    std::vector<std::future<Result>> futures;
+    auto futures = std::vector<std::future<Result>>();
 
     auto update_task = [] (Database::Index index, const Database::Array& U,
 			   const MeshGeometry& G, double dt)
@@ -520,16 +519,16 @@ void update_2d_threaded(Database& database, double dt, double rk_factor, int num
     }
 }
 
-void update(Database& database, double dt, int rk, int num_threads)
+void update(ThreadPool& pool, Database& database, double dt, int rk)
 {
     switch (rk)
     {
         case 1:
-            update_2d_threaded(database, dt, 0.0, num_threads);
+            update_2d_threaded(pool, database, dt, 0.0);
             break;
         case 2:
-            update_2d_threaded(database, dt, 0.0, num_threads);
-            update_2d_threaded(database, dt, 0.5, num_threads);
+            update_2d_threaded(pool, database, dt, 0.0);
+            update_2d_threaded(pool, database, dt, 0.5);
             break;
         default:
             throw std::invalid_argument("rk must be 1 or 2");
@@ -799,6 +798,9 @@ int run(int argc, const char* argv[])
     auto dt = 0.25 * M_PI / cfg.nr;
 
 
+    ThreadPool thread_pool(cfg.num_threads);
+
+
     // ========================================================================
     // Initial report
     // ========================================================================
@@ -820,7 +822,7 @@ int run(int argc, const char* argv[])
         scheduler.dispatch(sts.time);
 
         auto timer = Timer();
-        update(database, dt, cfg.rk, cfg.num_threads);
+        update(thread_pool, database, dt, cfg.rk);
 
         sts.time += dt;
         sts.iter += 1;
