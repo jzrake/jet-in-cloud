@@ -14,7 +14,7 @@
 #include "thread_pool.hpp"
 
 using namespace patches2d;
-namespace hydro = sr_hydro;
+namespace hydro = sru_hydro;
 using run_config = jic::run_config;
 using run_status = jic::run_status;
 
