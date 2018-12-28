@@ -9,6 +9,7 @@
 #include "ndarray.hpp"
 #include "physics.hpp"
 #include "patches.hpp"
+#include "dbser.hpp"
 #include "ufunc.hpp"
 #include "jic.hpp"
 #include "thread_pool.hpp"
@@ -54,13 +55,11 @@ void write_swapped_bytes_and_clear(std::ostream& os, std::vector<T>& buffer)
 // ============================================================================
 void write_chkpt(const Database& database, run_config cfg, run_status sts, int count)
 {
-    auto filename = cfg.make_filename_chkpt(count);
-    std::cout << "write checkpoint " << filename << std::endl;
+    auto chkpt = cfg.make_filename_chkpt(count);
+    std::cout << "write checkpoint " << chkpt << std::endl;
 
-    filesystem::remove_recurse(filename);
-    filesystem::require_dir(filename);
-    auto parts = std::vector<std::string>{filename};
-
+    FileSystemSerializer serializer(chkpt, "w");
+    database.dump(serializer);
 
     // Write the run config and status to json
     // ------------------------------------------------------------------------
@@ -69,42 +68,6 @@ void write_chkpt(const Database& database, run_config cfg, run_status sts, int c
 
     cfg.tojson(cfg_stream);
     sts.tojson(sts_stream);
-
-
-    // Write patch data
-    // ------------------------------------------------------------------------
-    for (const auto& patch : database)
-    {
-        parts.push_back(to_string(patch.first));
-        filesystem::require_dir(filesystem::parent(filesystem::join(parts)));
-        nd::tofile(patch.second, filesystem::join(parts));
-        parts.pop_back();
-    }
-}
-
-void load_patches_from_chkpt(Database& database, std::string filename)
-{
-    auto path = std::vector<std::string>{filename};
-
-    for (auto patch : filesystem::listdir(filename))
-    {
-        path.push_back(patch);
-
-        if (filesystem::isdir(filesystem::join(path)))
-        {
-            for (auto field : filesystem::listdir(filesystem::join(path)))
-            {
-                path.push_back(field);
-                auto ifs = std::ifstream(filesystem::join(path));
-                auto str = std::string(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
-                auto data = nd::array<double, 3>::loads(str);
-                auto index = patches2d::parse_index(filesystem::join({patch, field}));
-                database.insert(index, data);
-                path.pop_back();
-            }
-        }
-        path.pop_back();
-    }
 }
 
 void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int count)
@@ -469,27 +432,6 @@ auto advance_2d(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 
 
 // ============================================================================
-// void update_2d_nothread(Database& database, double dt, double rk_factor)
-// {
-//     auto results = std::map<Database::Index, Database::Array>();
-
-//     for (const auto& patch : database.all(Field::conserved))
-//     {
-//         auto U = database.fetch(patch.first, 2, 2, 0, 0);
-//         auto G = MeshGeometry(
-//             database.at(patch.first, Field::cell_coords),
-//             database.at(patch.first, Field::cell_volume),
-//             database.at(patch.first, Field::face_area_i),
-//             database.at(patch.first, Field::face_area_j));
-
-//         results[patch.first].become(advance_2d(U, G, dt));
-//     }
-//     for (const auto& res : results)
-//     {
-//         database.commit(res.first, res.second, rk_factor);
-//     }
-// }
-
 void update_2d_threaded(ThreadPool& pool, Database& database, double dt, double rk_factor)
 {
     using Result = std::pair<Database::Index, Database::Array>;
@@ -685,9 +627,34 @@ struct simple_boundary_value
 
 
 // ============================================================================
-Database::Header create_header()
+Database::BoundaryValue get_boundary_value(run_config cfg)
 {
-    return Database::Header
+    if (cfg.test_mode)
+    {
+        return simple_boundary_value();
+    }
+    else
+    {
+        return jet_boundary_value(cfg);
+    }
+}
+
+Database create_database(run_config cfg)
+{
+    if (! cfg.restart.empty())
+    {
+        FileSystemSerializer serializer(cfg.restart, "r");
+        auto database = Database::load(serializer);
+        database.set_boundary_value(get_boundary_value(cfg));
+        return database;
+    }
+
+    auto target_radial_zone_count = cfg.nr * std::log10(cfg.outer_radius);
+    auto block_size = target_radial_zone_count / cfg.num_blocks;
+
+    auto ni = block_size;
+    auto nj = cfg.nr;
+    auto header = Database::Header
     {
         {Field::conserved,   {5, MeshLocation::cell}},
         {Field::vert_coords, {2, MeshLocation::vert}},
@@ -696,66 +663,40 @@ Database::Header create_header()
         {Field::face_area_i, {1, MeshLocation::face_i}},
         {Field::face_area_j, {1, MeshLocation::face_j}},
     };
-}
+    auto database = Database(ni, nj, header);
+    auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
 
-Database create_database(run_config cfg)
-{
-    auto target_radial_zone_count = cfg.nr * std::log10(cfg.outer_radius);
-    auto block_size = target_radial_zone_count / cfg.num_blocks;
-
-    auto ni = block_size;
-    auto nj = cfg.nr;
-    auto database = Database(ni, nj, create_header());
-
-
-    if (! cfg.restart.empty())
+    for (int i = 0; i < cfg.num_blocks; ++i)
     {
-        load_patches_from_chkpt(database, cfg.restart);
-    }
-    else
-    {
-        auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
+        double r0 = std::pow(cfg.outer_radius, double(i + 0) / cfg.num_blocks);
+        double r1 = std::pow(cfg.outer_radius, double(i + 1) / cfg.num_blocks);
 
-        for (int i = 0; i < cfg.num_blocks; ++i)
+        auto x_verts = mesh_vertices(ni, nj, {r0, r1, 0, M_PI});
+        auto x_cells = mesh_cell_centroids(x_verts);
+        auto v_cells = mesh_cell_volumes(x_verts);
+        auto a_faces_i = mesh_face_areas_i(x_verts);
+        auto a_faces_j = mesh_face_areas_j(x_verts);
+
+        database.insert(std::make_tuple(i, 0, 0, Field::vert_coords), x_verts);
+        database.insert(std::make_tuple(i, 0, 0, Field::cell_coords), x_cells);
+        database.insert(std::make_tuple(i, 0, 0, Field::cell_volume), v_cells);
+        database.insert(std::make_tuple(i, 0, 0, Field::face_area_i), a_faces_i);
+        database.insert(std::make_tuple(i, 0, 0, Field::face_area_j), a_faces_j);
+
+        if (cfg.test_mode)
         {
-            double r0 = std::pow(cfg.outer_radius, double(i + 0) / cfg.num_blocks);
-            double r1 = std::pow(cfg.outer_radius, double(i + 1) / cfg.num_blocks);
-
-            auto x_verts = mesh_vertices(ni, nj, {r0, r1, 0, M_PI});
-            auto x_cells = mesh_cell_centroids(x_verts);
-            auto v_cells = mesh_cell_volumes(x_verts);
-            auto a_faces_i = mesh_face_areas_i(x_verts);
-            auto a_faces_j = mesh_face_areas_j(x_verts);
-
-            database.insert(std::make_tuple(i, 0, 0, Field::vert_coords), x_verts);
-            database.insert(std::make_tuple(i, 0, 0, Field::cell_coords), x_cells);
-            database.insert(std::make_tuple(i, 0, 0, Field::cell_volume), v_cells);
-            database.insert(std::make_tuple(i, 0, 0, Field::face_area_i), a_faces_i);
-            database.insert(std::make_tuple(i, 0, 0, Field::face_area_j), a_faces_j);
-
-            if (cfg.test_mode)
-            {
-                auto initial_data = ufunc::vfrom(explosion());
-                database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
-                
-            }
-            else
-            {
-                auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.temperature));
-                database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
-            }
+            auto initial_data = ufunc::vfrom(explosion());
+            database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
+            
+        }
+        else
+        {
+            auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.temperature));
+            database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
         }
     }
 
-    if (cfg.test_mode)
-    {
-        database.set_boundary_value(simple_boundary_value());       
-    }
-    else
-    {
-        database.set_boundary_value(jet_boundary_value(cfg));
-    }
-
+    database.set_boundary_value(get_boundary_value(cfg));
     return database;
 }
 
@@ -853,9 +794,6 @@ int run(int argc, const char* argv[])
 // ============================================================================
 int main(int argc, const char* argv[])
 {
-    // std::set_terminate(debug::terminate_with_backtrace);
-    // return run(argc, argv);
-
     try {
         return run(argc, argv);
     }
