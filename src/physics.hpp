@@ -237,6 +237,7 @@ namespace sr_hydro {
     struct sph_geom_src_terms;
 
     std::string to_string(Vars);
+    std::string to_string(Position);
 }
 
 
@@ -245,7 +246,7 @@ namespace sr_hydro {
 // ============================================================================
 struct sr_hydro::cons_to_prim
 {
-    inline Vars operator()(Vars U) const
+    inline Vars operator()(Vars U, Position X) const
     {
         const double gm  = gammaLawIndex;
         const double D   = U[DDD];
@@ -280,7 +281,8 @@ struct sr_hydro::cons_to_prim
             }
             if (++n_iter == newtonIterMax)
             {
-                throw std::invalid_argument("c2p failure: root finder not converging U=" + to_string(U));
+                throw std::invalid_argument("c2p failure: root finder not converging U="
+                    + to_string(U) + " at X=" + to_string(X));
             }
         }
 
@@ -480,8 +482,14 @@ struct sr_hydro::sph_geom_src_terms
 std::string sr_hydro::to_string(sr_hydro::Vars V)
 {
     char res[1024];
-    std::snprintf(res, 1024, "[%4.3e %4.3e %4.3e %4.3e %4.3e]",
-        V[0], V[1], V[2], V[3], V[4]);
+    std::snprintf(res, 1024, "[%4.3e %4.3e %4.3e %4.3e %4.3e]", V[0], V[1], V[2], V[3], V[4]);
+    return res;
+}
+
+std::string sr_hydro::to_string(sr_hydro::Position X)
+{
+    char res[1024];
+    std::snprintf(res, 1024, "[r=%f q=%f]", X[0], X[1]);
     return res;
 }
 
@@ -521,6 +529,7 @@ namespace sru_hydro {
     struct sph_geom_src_terms;
 
     std::string to_string(Vars);
+    std::string to_string(Position);
 }
 
 
@@ -529,7 +538,7 @@ namespace sru_hydro {
 // ============================================================================
 struct sru_hydro::cons_to_prim
 {
-    inline Vars operator()(Vars U) const
+    inline Vars operator()(Vars U, Position X) const
     {
         const double gm  = gammaLawIndex;
         const double D   = U[DDD];
@@ -541,11 +550,11 @@ struct sru_hydro::cons_to_prim
         double f;
         double g;
         double W0 = 1.0;
-        double p = 1.0; // guess pressure
+        double p = 0.0; // guess pressure
 
         while (! soln_found)
         {
-            double v2  = SS / std::pow(tau + D + p, 2);
+            double v2  = std::min(SS / std::pow(tau + D + p, 2), 1.0 - 1e-10);
             double W2  = 1.0 / (1.0 - v2);
             double W   = std::sqrt(W2);
             double e   = (tau + D * (1.0 - W) + p * (1.0 - W2)) / (D * W);
@@ -564,7 +573,11 @@ struct sru_hydro::cons_to_prim
             }
             if (++n_iter == newtonIterMax)
             {
-                throw std::invalid_argument("c2p failure: root finder not converging U=" + to_string(U));
+                throw std::invalid_argument("c2p failure: "
+                    "root finder not converging\n"
+                    "U=" + to_string(U) + "\n"
+                    "X=" + to_string(X) + "\n"
+                    "error=" + std::to_string(f));
             }
         }
 
@@ -765,5 +778,12 @@ std::string sru_hydro::to_string(sru_hydro::Vars V)
     char res[1024];
     std::snprintf(res, 1024, "[%4.3e %4.3e %4.3e %4.3e %4.3e]",
         V[0], V[1], V[2], V[3], V[4]);
+    return res;
+}
+
+std::string sru_hydro::to_string(sru_hydro::Position X)
+{
+    char res[1024];
+    std::snprintf(res, 1024, "[r=%f q=%f]", X[0], X[1]);
     return res;
 }

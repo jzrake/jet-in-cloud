@@ -118,7 +118,8 @@ void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int
     // Write primitive data
     // ------------------------------------------------------------------------
     auto cons = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::conserved);
-    auto prim = cons_to_prim(cons);
+    auto cell = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::cell_coords);
+    auto prim = cons_to_prim(cons, cell);
     stream << "CELL_DATA " << prim.shape(0) * prim.shape(1) << "\n";
 
     stream << "SCALARS " << "density " << "FLOAT " << 1 << "\n";
@@ -165,17 +166,20 @@ void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int
 struct MeshGeometry
 {
     MeshGeometry(
-        const nd::array<double, 3>& A,
+        nd::array<double, 3> A,
         const nd::array<double, 3>& B,
         const nd::array<double, 3>& C,
-        const nd::array<double, 3>& D)
-    : centroids(A)
-    , volumes(B)
-    , face_areas_i(C)
-    , face_areas_j(D)
+        const nd::array<double, 3>& D,
+        const nd::array<double, 3>& E)
+    : centroids_extended(A)
+    , centroids(B)
+    , volumes(C)
+    , face_areas_i(D)
+    , face_areas_j(E)
     {
     }
 
+    nd::array<double, 3> centroids_extended;
     const nd::array<double, 3>& centroids;
     const nd::array<double, 3>& volumes;
     const nd::array<double, 3>& face_areas_i;
@@ -390,7 +394,7 @@ auto advance_2d(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 
     auto mi = U0.shape(0);
     auto mj = U0.shape(1);
-    auto P0 = cons_to_prim(U0);
+    auto P0 = cons_to_prim(U0, G.centroids_extended);
 
     auto Fhi = [&] ()
     {
@@ -437,6 +441,12 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double dt, double 
     using Result = std::pair<Database::Index, Database::Array>;
     auto futures = std::vector<std::future<Result>>();
 
+    auto field = [] (Database::Index index, Field field)
+    {
+        std::get<3>(index) = field;
+        return index;
+    };
+
     auto update_task = [] (Database::Index index, const Database::Array& U,
 			   const MeshGeometry& G, double dt)
     {
@@ -447,6 +457,7 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double dt, double 
     {
         auto U = database.fetch(patch.first, 2, 2, 0, 0);
         auto G = MeshGeometry(
+            database.fetch(field(patch.first, Field::cell_coords), 2, 2, 0, 0),
             database.at(patch.first, Field::cell_coords),
             database.at(patch.first, Field::cell_volume),
             database.at(patch.first, Field::face_area_i),
@@ -522,25 +533,45 @@ struct jet_boundary_value
     jet_boundary_value(run_config cfg) : cfg(cfg) {}
 
     nd::array<double, 3> operator()(
-        Database::Index,
+        Database::Index index,
         PatchBoundary edge,
         int /*depth*/,
         const nd::array<double, 3>& patch) const
     {
-        switch (edge)
+        if (std::get<3>(index) == Field::conserved)
         {
-            case PatchBoundary::il: return inflow_inner(patch);
-            case PatchBoundary::ir: return zero_gradient_outer(patch);
-            case PatchBoundary::jl: return nd::array<double, 3>();
-            case PatchBoundary::jr: return nd::array<double, 3>();
+            switch (edge)
+            {
+                case PatchBoundary::il: return inflow_inner(patch);
+                case PatchBoundary::ir: return zero_gradient_outer(patch);
+                default: throw;
+            }
         }
-	throw;
+        else if (std::get<3>(index) == Field::cell_coords)
+        {
+            switch (edge)
+            {
+                case PatchBoundary::il: return zero_gradient_inner(patch);
+                case PatchBoundary::ir: return zero_gradient_outer(patch);
+                default: throw;
+            }            
+        }
+        throw;
+    }
+
+    nd::array<double, 3> zero_gradient_inner(const nd::array<double, 3>& patch) const
+    {
+        auto _ = nd::axis::all();
+        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
+        U.select(0, _, _) = patch.select(0, _, _);
+        U.select(1, _, _) = patch.select(0, _, _);
+        return U;
     }
 
     nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
     {
         auto _ = nd::axis::all();
-        auto U = nd::array<double, 3>(2, patch.shape(1), 5);
+        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
         U.select(0, _, _) = patch.select(patch.shape(0) - 1, _, _);
         U.select(1, _, _) = patch.select(patch.shape(0) - 1, _, _);
         return U;
@@ -601,7 +632,7 @@ struct simple_boundary_value
             case PatchBoundary::jl: return nd::array<double, 3>();
             case PatchBoundary::jr: return nd::array<double, 3>();
         }
-	throw;
+	   throw;
     }
 
     nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
