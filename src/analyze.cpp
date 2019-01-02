@@ -6,55 +6,10 @@
 #include "jic.hpp"
 #include "physics.hpp"
 #include "ufunc.hpp"
+#include "dbser.hpp"
 
-namespace hydro = sr_hydro;
+namespace hydro = sru_hydro;
 using namespace patches2d;
-
-
-
-
-// ============================================================================
-Database::Header create_header()
-{
-    return Database::Header
-    {
-        {Field::conserved,   {5, MeshLocation::cell}},
-        {Field::vert_coords, {2, MeshLocation::vert}},
-        {Field::cell_coords, {2, MeshLocation::cell}},
-        {Field::cell_volume, {1, MeshLocation::cell}},
-        {Field::face_area_i, {1, MeshLocation::face_i}},
-        {Field::face_area_j, {1, MeshLocation::face_j}},
-    };
-}
-
-
-
-
-// ============================================================================
-void load_patches_from_chkpt(Database& database, std::string filename)
-{
-    auto path = std::vector<std::string>{filename};
-
-    for (auto patch : filesystem::listdir(filename))
-    {
-        path.push_back(patch);
-
-        if (filesystem::isdir(filesystem::join(path)))
-        {
-            for (auto field : filesystem::listdir(filesystem::join(path)))
-            {
-                path.push_back(field);
-                auto ifs = std::ifstream(filesystem::join(path));
-                auto str = std::string(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
-                auto data = nd::array<double, 3>::loads(str);
-                auto index = patches2d::parse_index(filesystem::join({patch, field}));
-                database.insert(index, data);
-                path.pop_back();
-            }
-        }
-        path.pop_back();
-    }
-}
 
 
 
@@ -69,6 +24,8 @@ int main(int argc, const char* argv[])
     }
 
     try {
+        std::cout << argv[1] << " " << filesystem::join({argv[1], "config.json"}) << std::endl;
+
         auto cfg_fname = filesystem::join({argv[1], "config.json"});
         auto sts_fname = filesystem::join({argv[1], "status.json"});
         auto cfg_ifs = std::ifstream(cfg_fname);
@@ -84,25 +41,14 @@ int main(int argc, const char* argv[])
         }
 
 
-        // Load and print the config and status files
+        // Load and print the config, status, and database files
         // --------------------------------------------------------------------
         auto cfg = jic::run_config::from_json(cfg_ifs);
         auto sts = jic::run_status::from_json(sts_ifs);
-        cfg.print(std::cout);
-        sts.print(std::cout);
-
-
-        // Infer the block size and count from the config file
-        // TODO: write (and then read from) database header file
-        // --------------------------------------------------------------------
-        auto target_radial_zone_count = cfg.nr * std::log10(cfg.outer_radius);
-        auto block_size = target_radial_zone_count / cfg.num_blocks;
-        auto ni = block_size;
-        auto nj = cfg.nr;
-        auto database = Database(ni, nj, create_header());
-        load_patches_from_chkpt(database, argv[1]);
+        auto database = Database::load(FileSystemSerializer(argv[1], "r"));
+        cfg.print     (std::cout);
+        sts.print     (std::cout);
         database.print(std::cout);
-
 
 
         // Assemble the conserved variable array and convert it to primitives

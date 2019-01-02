@@ -6,6 +6,7 @@
 *.dSYM
 .DS_Store
 jic
+analyze
 Makefile.in
 data
 media

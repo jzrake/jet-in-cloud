@@ -21,7 +21,8 @@ CXXFLAGS += -O3
 SRC := $(wildcard src/*.cpp)
 OBJ := $(SRC:%.cpp=%.o)
 DEP := $(SRC:%.cpp=%.d)
-EXE := jic
+EXE := jic analyze
+MAINS := src/main.o src/analyze.o
 
 
 # Build rules
@@ -37,7 +38,10 @@ main-build: pre-build
 post-build: main-build
 	@find src -type l -delete
 
-$(EXE): $(OBJ)
+jic: src/main.o $(filter-out $(MAINS), $(OBJ))
+	$(CXX) -o $@ $^ $(LDFLAGS)
+
+analyze: src/analyze.o $(filter-out $(MAINS), $(OBJ))
 	$(CXX) -o $@ $^ $(LDFLAGS)
 
 clean:
