@@ -73,7 +73,7 @@ struct jic::run_config
     std::string restart = "";
     double tfinal       = 0.1;
     double cpi          = 1.0;
-    double vtki         = 1.0;
+    double vtki         = 0.0;
     int rk              = 1;
     int nr              = 32;
     int num_threads     = 1;

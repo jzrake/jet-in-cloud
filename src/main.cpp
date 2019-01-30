@@ -356,7 +356,7 @@ struct gradient_plm
 
 
 // ============================================================================
-auto advance_2d(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
+auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 {
     auto _ = nd::axis::all();
 
@@ -396,7 +396,7 @@ auto advance_2d(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
     auto mj = U0.shape(1);
     auto P0 = cons_to_prim(U0, G.centroids_extended);
 
-    auto Fhi = [&] ()
+    auto Fhi = [&]
     {
         auto Pa = P0.select(_|0|mi-2, _, _);
         auto Pb = P0.select(_|1|mi-1, _, _);
@@ -409,7 +409,7 @@ auto advance_2d(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
         return Fa;
     }();
 
-    auto Fhj = [&] ()
+    auto Fhj = [&]
     {
         auto Pa = P0.select(_|2|mi-2, _|0|mj-2, _);
         auto Pb = P0.select(_|2|mi-2, _|1|mj-1, _);
@@ -432,6 +432,13 @@ auto advance_2d(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
     return U0.take<0>(_|2|mi-2) + dU;
 }
 
+auto advance_vert(nd::array<double, 3> X0, double dt)
+{
+    auto vel = ufunc::vfrom([] (std::array<double, 2> x) { return std::array<double, 2> { 0.1 * x[0], 0.0 }; });
+    auto dX = vel(X0) * dt;
+    return X0 + dX;
+}
+
 
 
 
@@ -447,28 +454,54 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double dt, double 
         return index;
     };
 
-    auto update_task = [] (Database::Index index, const Database::Array& U,
-			   const MeshGeometry& G, double dt)
+    auto update_cons = [] (Database::Index index, const Database::Array& U, const MeshGeometry& G, double dt)
     {
-        return std::make_pair(index, advance_2d(U, G, dt));
+        return std::make_pair(index, advance_cons(U, G, dt));
     };
 
-    for (const auto& patch : database.all(Field::conserved))
+    auto update_vert = [] (Database::Index index, const Database::Array& X, double dt)
     {
-        auto U = database.fetch(patch.first, 2, 2, 0, 0);
-        auto G = MeshGeometry(
-            database.fetch(field(patch.first, Field::cell_coords), 2, 2, 0, 0),
-            database.at(patch.first, Field::cell_coords),
-            database.at(patch.first, Field::cell_volume),
-            database.at(patch.first, Field::face_area_i),
-            database.at(patch.first, Field::face_area_j));
-        futures.push_back(pool.enqueue(update_task, patch.first, U, G, dt));
+        return std::make_pair(index, advance_vert(X, dt));
+    };
+
+    // for (const auto& patch : database.all(Field::conserved))
+    // {
+    //     auto U = database.fetch(patch.first, 2, 2, 0, 0);
+    //     auto G = MeshGeometry(
+    //         database.fetch(field(patch.first, Field::cell_coords), 2, 2, 0, 0),
+    //         database.at(patch.first, Field::cell_coords),
+    //         database.at(patch.first, Field::cell_volume),
+    //         database.at(patch.first, Field::face_area_i),
+    //         database.at(patch.first, Field::face_area_j));
+    //     futures.push_back(pool.enqueue(update_cons, patch.first, U, G, dt));
+    // }
+
+    for (const auto& patch : database.all(Field::vert_coords))
+    {
+        auto X = database.at(patch.first);
+        futures.push_back(pool.enqueue(update_vert, patch.first, X, dt));
     }
 
     for (auto& future : futures)
     {
         auto result = future.get();
         database.commit(result.first, result.second, rk_factor);
+    }
+
+    for (const auto& patch : database.all(Field::vert_coords))
+    {
+        auto i = std::get<0>(patch.first);
+        auto x_verts = patch.second;
+        auto x_cells = mesh_cell_centroids(x_verts);
+        auto v_cells = mesh_cell_volumes(x_verts);
+        auto a_faces_i = mesh_face_areas_i(x_verts);
+        auto a_faces_j = mesh_face_areas_j(x_verts);
+
+        // database.insert(std::make_tuple(i, 0, 0, Field::vert_coords), x_verts);
+        database.insert(std::make_tuple(i, 0, 0, Field::cell_coords), x_cells);
+        database.insert(std::make_tuple(i, 0, 0, Field::cell_volume), v_cells);
+        database.insert(std::make_tuple(i, 0, 0, Field::face_area_i), a_faces_i);
+        database.insert(std::make_tuple(i, 0, 0, Field::face_area_j), a_faces_j);
     }
 }
 
@@ -718,7 +751,6 @@ Database create_database(run_config cfg)
         {
             auto initial_data = ufunc::vfrom(explosion());
             database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
-            
         }
         else
         {

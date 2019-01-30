@@ -94,7 +94,7 @@ std::string filesystem::join(std::vector<std::string> parts)
     {
         res += "/" + part;
     }
-    return res.substr(1);
+    return res.empty() ? res : res.substr(1);
 }
 
 std::string filesystem::extension(std::string path)
