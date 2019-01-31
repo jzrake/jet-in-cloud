@@ -607,8 +607,8 @@ struct jet_boundary_value
         {
             switch (edge)
             {
-                //case PatchBoundary::il: return inflow_inner(patch);
-                case PatchBoundary::il: return zero_gradient_inner(patch);
+                case PatchBoundary::il: return inflow_inner(patch);
+                // case PatchBoundary::il: return zero_gradient_inner(patch);
                 case PatchBoundary::ir: return zero_gradient_outer(patch);
                 default: throw;
             }
@@ -626,9 +626,8 @@ struct jet_boundary_value
         {
             switch (edge)
             {
-                // NOTE: we return wrong volumes in guard zones, because it
-                // does not matter as long as we do this consistently.
-                case PatchBoundary::il: return zero_gradient_inner(patch);
+                // NOTE: inner guard zones are given arbitrary volume value of 1.
+                case PatchBoundary::il: return ones(patch);
                 case PatchBoundary::ir: return zero_gradient_outer(patch);
                 default: throw;
             }            
@@ -654,26 +653,35 @@ struct jet_boundary_value
         return U;
     }
 
-    // nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
-    // {
-    //     auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
-    //     auto P = nd::array<double, 3>(2, patch.shape(1), 5);
+    nd::array<double, 3> ones(const nd::array<double, 3>& patch) const
+    {
+        auto _ = nd::axis::all();
+        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
+        U.select(0, _, _) = 1.0;
+        U.select(1, _, _) = 1.0;
+        return U;
+    }
 
-    //     for (int i = 0; i < 2; ++i)
-    //     {
-    //         for (int j = 0; j < patch.shape(1); ++j)
-    //         {
-    //             auto q = M_PI * (j + 0.5) / patch.shape(1);
-    //             auto inflowP = jet_inlet(q);
+    nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
+    {
+        auto prim_to_cons = ufunc::vfrom([p2c=hydro::prim_to_cons()] (hydro::Vars P) { return p2c(P, {1.0}); });
+        auto P = nd::array<double, 3>(2, patch.shape(1), 5);
 
-    //             for (int k = 0; k < 5; ++k)
-    //             {
-    //                 P(i, j, k) = inflowP[k];
-    //             }
-    //         }
-    //     }
-    //     return prim_to_cons(P);
-    // }
+        for (int i = 0; i < 2; ++i)
+        {
+            for (int j = 0; j < patch.shape(1); ++j)
+            {
+                auto q = M_PI * (j + 0.5) / patch.shape(1);
+                auto inflowP = jet_inlet(q);
+
+                for (int k = 0; k < 5; ++k)
+                {
+                    P(i, j, k) = inflowP[k];
+                }
+            }
+        }
+        return prim_to_cons(P);
+    }
 
     hydro::Vars jet_inlet(double q) const
     {
