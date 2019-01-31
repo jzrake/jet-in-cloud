@@ -164,6 +164,178 @@ void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int
 
 
 // ============================================================================
+class rk_double
+{
+public:
+    rk_double() {}
+    rk_double(double t) : t(t) {}
+
+    void commit(double t1, double rk_factor)
+    {
+        t = t1 * (1 - rk_factor) + t * rk_factor;
+    }
+    operator double() const
+    {
+        return t;
+    }
+
+private:
+    double t = 0.0;
+};
+
+
+
+
+// ============================================================================
+struct atmosphere
+{
+    atmosphere(double density_index, double temperature)
+    : density_index(density_index)
+    , temperature(temperature)
+    {
+    }
+
+    inline std::array<double, 5> operator()(std::array<double, 2> X) const
+    {
+        const double r = X[0];
+        const double a = density_index;
+        return std::array<double, 5>{std::pow(r, -a), 0.0, 0.0, 0.0, temperature * std::pow(r, -a)};
+    }
+    double density_index;
+    double temperature;
+};
+
+
+
+
+// ============================================================================
+struct explosion
+{
+    inline std::array<double, 5> operator()(std::array<double, 2> X) const
+    {
+        double d = X[0] < 2 ? 1.0 : 0.1;
+        double p = X[0] < 2 ? 1.0 : 0.125;
+        return std::array<double, 5>{d, 0.0, 0.0, 0.0, p};
+    }
+};
+
+
+
+
+
+// ============================================================================
+struct jet_boundary_value
+{
+    jet_boundary_value(jic::run_config cfg, double t) : cfg(cfg), t(t) {}
+
+    nd::array<double, 3> operator()(
+        Database::Index index,
+        PatchBoundary edge,
+        int /*depth*/,
+        const nd::array<double, 3>& patch) const
+    {
+        if (std::get<3>(index) == Field::conserved)
+        {
+            switch (edge)
+            {
+                case PatchBoundary::il: return inflow_inner(patch);
+                // case PatchBoundary::il: return zero_gradient_inner(patch);
+                case PatchBoundary::ir: return zero_gradient_outer(patch);
+                default: throw;
+            }
+        }
+        else if (std::get<3>(index) == Field::cell_coords)
+        {
+            switch (edge)
+            {
+                case PatchBoundary::il: return zero_gradient_inner(patch);
+                case PatchBoundary::ir: return zero_gradient_outer(patch);
+                default: throw;
+            }
+        }
+        else if (std::get<3>(index) == Field::cell_volume)
+        {
+            switch (edge)
+            {
+                // NOTE: inner guard zones are given arbitrary volume value of 1.
+                case PatchBoundary::il: return ones(patch);
+                case PatchBoundary::ir: return zero_gradient_outer(patch);
+                default: throw;
+            }            
+        }
+        throw;
+    }
+
+    nd::array<double, 3> zero_gradient_inner(const nd::array<double, 3>& patch) const
+    {
+        auto _ = nd::axis::all();
+        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
+        U.select(0, _, _) = patch.select(0, _, _);
+        U.select(1, _, _) = patch.select(0, _, _);
+        return U;
+    }
+
+    nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
+    {
+        auto _ = nd::axis::all();
+        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
+        U.select(0, _, _) = patch.select(patch.shape(0) - 1, _, _);
+        U.select(1, _, _) = patch.select(patch.shape(0) - 1, _, _);
+        return U;
+    }
+
+    nd::array<double, 3> ones(const nd::array<double, 3>& patch) const
+    {
+        auto _ = nd::axis::all();
+        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
+        U.select(0, _, _) = 1.0;
+        U.select(1, _, _) = 1.0;
+        return U;
+    }
+
+    nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
+    {
+        auto prim_to_cons = ufunc::vfrom([p2c=hydro::prim_to_cons()] (hydro::Vars P) { return p2c(P, {1.0}); });
+        auto P = nd::array<double, 3>(2, patch.shape(1), 5);
+
+        for (int i = 0; i < 2; ++i)
+        {
+            for (int j = 0; j < patch.shape(1); ++j)
+            {
+                auto q = M_PI * (j + 0.5) / patch.shape(1);
+                auto inflowP = jet_inlet(q);
+
+                for (int k = 0; k < 5; ++k)
+                {
+                    P(i, j, k) = inflowP[k];
+                }
+            }
+        }
+        return prim_to_cons(P);
+    }
+
+    hydro::Vars jet_inlet(double q) const
+    {
+        auto q0 = 0.0;
+        auto q1 = M_PI;
+        auto u0 = cfg.jet_velocity * std::exp(-t / cfg.jet_timescale);
+        auto dg = cfg.jet_density;
+        auto dq = cfg.jet_opening_angle;
+        auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
+        auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
+        auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg};
+        return inflowP;
+    }
+
+private:
+    run_config cfg;
+    double t;
+};
+
+
+
+
+// ============================================================================
 struct MeshGeometry
 {
     MeshGeometry(
@@ -511,7 +683,7 @@ auto advance_vert(nd::array<double, 3> X0, double rate, double dt)
 
 
 // ============================================================================
-void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_rate, double dt, double rk_factor)
+void update_2d_threaded(ThreadPool& pool, Database& database, rk_double& t, jic::run_config cfg, double dt, double rk_factor)
 {
     using Result = std::pair<Database::Index, Database::Array>;
     auto futures = std::vector<std::future<Result>>();
@@ -531,13 +703,15 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_r
         return std::make_pair(index, advance_cons(U, G, rate, dt));
     };
 
-    auto update_vert = [rate=expansion_rate] (
+    auto update_vert = [rate=cfg.expansion_rate] (
         Database::Index index,
         const Database::Array& X,
         double dt)
     {
         return std::make_pair(index, advance_vert(X, rate, dt));
     };
+
+    database.set_boundary_value(jet_boundary_value(cfg, t));
 
     for (const auto& patch : database.all(Field::conserved))
     {
@@ -550,7 +724,7 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_r
             database.at(patch.first, Field::cell_volume),
             database.at(patch.first, Field::face_area_i),
             database.at(patch.first, Field::face_area_j));
-        futures.push_back(pool.enqueue(update_cons, patch.first, U, G, expansion_rate, dt));
+        futures.push_back(pool.enqueue(update_cons, patch.first, U, G, cfg.expansion_rate, dt));
     }
 
     for (const auto& patch : database.all(Field::vert_coords))
@@ -565,19 +739,20 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_r
         database.commit(result.first, result.second, rk_factor);
     }
 
+    t.commit(t + dt, rk_factor);
     update_mesh_geometry_from_vertices(database);
 }
 
-void update(ThreadPool& pool, Database& database, double expansion_rate, double dt, int rk)
+void update(ThreadPool& pool, Database& database, rk_double &t, run_config cfg, double dt, int rk)
 {
     switch (rk)
     {
         case 1:
-            update_2d_threaded(pool, database, expansion_rate, dt, 0.0);
+            update_2d_threaded(pool, database, t, cfg, dt, 0.0);
             break;
         case 2:
-            update_2d_threaded(pool, database, expansion_rate, dt, 0.0);
-            update_2d_threaded(pool, database, expansion_rate, dt, 0.5);
+            update_2d_threaded(pool, database, t, cfg, dt, 0.0);
+            update_2d_threaded(pool, database, t, cfg, dt, 0.5);
             break;
         default:
             throw std::invalid_argument("rk must be 1 or 2");
@@ -588,211 +763,12 @@ void update(ThreadPool& pool, Database& database, double expansion_rate, double 
 
 
 // ============================================================================
-struct atmosphere
-{
-    atmosphere(double density_index, double temperature)
-    : density_index(density_index)
-    , temperature(temperature)
-    {
-    }
-
-    inline std::array<double, 5> operator()(std::array<double, 2> X) const
-    {
-        const double r = X[0];
-        const double a = density_index;
-        return std::array<double, 5>{std::pow(r, -a), 0.0, 0.0, 0.0, temperature * std::pow(r, -a)};
-    }
-    double density_index;
-    double temperature;
-};
-
-
-
-
-// ============================================================================
-struct explosion
-{
-    inline std::array<double, 5> operator()(std::array<double, 2> X) const
-    {
-        double d = X[0] < 2 ? 1.0 : 0.1;
-        double p = X[0] < 2 ? 1.0 : 0.125;
-        return std::array<double, 5>{d, 0.0, 0.0, 0.0, p};
-    }
-};
-
-
-
-
-// ============================================================================
-struct jet_boundary_value
-{
-    jet_boundary_value(run_config cfg) : cfg(cfg) {}
-
-    nd::array<double, 3> operator()(
-        Database::Index index,
-        PatchBoundary edge,
-        int /*depth*/,
-        const nd::array<double, 3>& patch) const
-    {
-        if (std::get<3>(index) == Field::conserved)
-        {
-            switch (edge)
-            {
-                case PatchBoundary::il: return inflow_inner(patch);
-                // case PatchBoundary::il: return zero_gradient_inner(patch);
-                case PatchBoundary::ir: return zero_gradient_outer(patch);
-                default: throw;
-            }
-        }
-        else if (std::get<3>(index) == Field::cell_coords)
-        {
-            switch (edge)
-            {
-                case PatchBoundary::il: return zero_gradient_inner(patch);
-                case PatchBoundary::ir: return zero_gradient_outer(patch);
-                default: throw;
-            }
-        }
-        else if (std::get<3>(index) == Field::cell_volume)
-        {
-            switch (edge)
-            {
-                // NOTE: inner guard zones are given arbitrary volume value of 1.
-                case PatchBoundary::il: return ones(patch);
-                case PatchBoundary::ir: return zero_gradient_outer(patch);
-                default: throw;
-            }            
-        }
-        throw;
-    }
-
-    nd::array<double, 3> zero_gradient_inner(const nd::array<double, 3>& patch) const
-    {
-        auto _ = nd::axis::all();
-        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
-        U.select(0, _, _) = patch.select(0, _, _);
-        U.select(1, _, _) = patch.select(0, _, _);
-        return U;
-    }
-
-    nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
-    {
-        auto _ = nd::axis::all();
-        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
-        U.select(0, _, _) = patch.select(patch.shape(0) - 1, _, _);
-        U.select(1, _, _) = patch.select(patch.shape(0) - 1, _, _);
-        return U;
-    }
-
-    nd::array<double, 3> ones(const nd::array<double, 3>& patch) const
-    {
-        auto _ = nd::axis::all();
-        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
-        U.select(0, _, _) = 1.0;
-        U.select(1, _, _) = 1.0;
-        return U;
-    }
-
-    nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
-    {
-        auto prim_to_cons = ufunc::vfrom([p2c=hydro::prim_to_cons()] (hydro::Vars P) { return p2c(P, {1.0}); });
-        auto P = nd::array<double, 3>(2, patch.shape(1), 5);
-
-        for (int i = 0; i < 2; ++i)
-        {
-            for (int j = 0; j < patch.shape(1); ++j)
-            {
-                auto q = M_PI * (j + 0.5) / patch.shape(1);
-                auto inflowP = jet_inlet(q);
-
-                for (int k = 0; k < 5; ++k)
-                {
-                    P(i, j, k) = inflowP[k];
-                }
-            }
-        }
-        return prim_to_cons(P);
-    }
-
-    hydro::Vars jet_inlet(double q) const
-    {
-        auto q0 = 0.0;
-        auto q1 = M_PI;
-        auto u0 = cfg.jet_velocity;
-        auto dg = cfg.jet_density;
-        auto dq = cfg.jet_opening_angle;
-        auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
-        auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
-        auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg};
-        return inflowP;
-    }
-    run_config cfg;
-};
-
-
-
-
-// ============================================================================
-struct simple_boundary_value
-{
-    nd::array<double, 3> operator()(
-        Database::Index,
-        PatchBoundary edge,
-        int /*depth*/,
-        const nd::array<double, 3>& patch) const
-    {
-        switch (edge)
-        {
-            case PatchBoundary::il: return zero_gradient_inner(patch);
-            case PatchBoundary::ir: return zero_gradient_outer(patch);
-            case PatchBoundary::jl: return nd::array<double, 3>();
-            case PatchBoundary::jr: return nd::array<double, 3>();
-        }
-	   throw;
-    }
-
-    nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
-    {
-        auto _ = nd::axis::all();
-        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
-        U.select(0, _, _) = patch.select(patch.shape(0) - 1, _, _);
-        U.select(1, _, _) = patch.select(patch.shape(0) - 1, _, _);
-        return U;
-    }
-
-    nd::array<double, 3> zero_gradient_inner(const nd::array<double, 3>& patch) const
-    {
-        auto _ = nd::axis::all();
-        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
-        U.select(0, _, _) = patch.select(0, _, _);
-        U.select(1, _, _) = patch.select(0, _, _);
-        return U;
-    }
-};
-
-
-
-
-// ============================================================================
-Database::BoundaryValue get_boundary_value(run_config cfg)
-{
-    if (cfg.test_mode)
-    {
-        return simple_boundary_value();
-    }
-    else
-    {
-        return jet_boundary_value(cfg);
-    }
-}
-
 Database create_database(run_config cfg)
 {
     if (! cfg.restart.empty())
     {
         FileSystemSerializer serializer(cfg.restart, "r");
         auto database = Database::load(serializer);
-        database.set_boundary_value(get_boundary_value(cfg));
         return database;
     }
 
@@ -842,8 +818,6 @@ Database create_database(run_config cfg)
             database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells), v_cells));
         }
     }
-
-    database.set_boundary_value(get_boundary_value(cfg));
     return database;
 }
 
@@ -910,9 +884,10 @@ int run(int argc, const char* argv[])
         scheduler.dispatch(sts.time);
 
         auto timer = Timer();
-        update(thread_pool, database, cfg.expansion_rate, dt, cfg.rk);
+        auto rk_time = rk_double(sts.time);
+        update(thread_pool, database, rk_time, cfg, dt, cfg.rk);
 
-        sts.time += dt;
+        sts.time = rk_time;
         sts.iter += 1;
         sts.wall += timer.seconds();
 

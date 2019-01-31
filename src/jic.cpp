@@ -25,6 +25,7 @@ VISITABLE_STRUCT(run_config,
     jet_opening_angle,
     jet_velocity,
     jet_density,
+    jet_timescale,
     density_index,
     temperature,
     outer_radius);

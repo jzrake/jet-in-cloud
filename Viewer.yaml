@@ -13,14 +13,14 @@ file-patterns: ['chkpt.*']
 
 
 environment:
-  component   : 0
+  component   : 1
   mapping     : (scalar-mapping vmin vmax stops)
   density     : (load-patches2d file 'primitive' component=component)
   vert_coords : (map sph-to-cart (load-patches2d file 'vert_coords'))
-  field       : (map log10 density)
+  field       : $density # (map log10 density)
   scalars     : (map to-gpu field replicate=6)
   vertices    : (map to-gpu-triangulate vert_coords)
-
+  fields      : [Density, Radial Four Velocity, Azimuthal Four Velocity, '', Pressure]
 expensive: [vert_coords, density, field, scalars, vertices, vmin, vmax]
 
 
@@ -31,7 +31,7 @@ commands:
 
 
 figures:
-- title: "Density"
+- title: (item fields component)
   margin: [80, 20, 60, 70]
   gridlines-color: [0, 0, 0, 0]
   background-color: [40, 40, 40, 255]

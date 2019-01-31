@@ -1,3 +1,4 @@
+#pragma once
 #include <ostream>
 #include <string>
 #include <map>
@@ -84,6 +85,7 @@ struct jic::run_config
     double jet_opening_angle = 0.5;
     double jet_velocity      = 0.9;
     double jet_density       = 0.01;
+    double jet_timescale     = 10.0;
     double density_index     = 2.0;
     double temperature       = 0.01;
     double outer_radius      = 10.0;
