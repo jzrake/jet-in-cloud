@@ -87,4 +87,5 @@ struct jic::run_config
     double density_index     = 2.0;
     double temperature       = 0.01;
     double outer_radius      = 10.0;
+    double expansion_rate    = 0.0;
 };

@@ -432,9 +432,9 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
     return U0.take<0>(_|2|mi-2) + dU;
 }
 
-auto advance_vert(nd::array<double, 3> X0, double dt)
+auto advance_vert(nd::array<double, 3> X0, double rate, double dt)
 {
-    auto vel = ufunc::vfrom([] (std::array<double, 2> x) { return std::array<double, 2> { 0.1 * x[0], 0.0 }; });
+    auto vel = ufunc::vfrom([rate] (std::array<double, 2> x) { return std::array<double, 2> { rate * x[0], 0.0 }; });
     auto dX = vel(X0) * dt;
     return X0 + dX;
 }
@@ -443,7 +443,7 @@ auto advance_vert(nd::array<double, 3> X0, double dt)
 
 
 // ============================================================================
-void update_2d_threaded(ThreadPool& pool, Database& database, double dt, double rk_factor)
+void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_rate, double dt, double rk_factor)
 {
     using Result = std::pair<Database::Index, Database::Array>;
     auto futures = std::vector<std::future<Result>>();
@@ -459,9 +459,9 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double dt, double 
         return std::make_pair(index, advance_cons(U, G, dt));
     };
 
-    auto update_vert = [] (Database::Index index, const Database::Array& X, double dt)
+    auto update_vert = [rate=expansion_rate] (Database::Index index, const Database::Array& X, double dt)
     {
-        return std::make_pair(index, advance_vert(X, dt));
+        return std::make_pair(index, advance_vert(X, rate, dt));
     };
 
     // for (const auto& patch : database.all(Field::conserved))
@@ -505,16 +505,16 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double dt, double 
     }
 }
 
-void update(ThreadPool& pool, Database& database, double dt, int rk)
+void update(ThreadPool& pool, Database& database, double expansion_rate, double dt, int rk)
 {
     switch (rk)
     {
         case 1:
-            update_2d_threaded(pool, database, dt, 0.0);
+            update_2d_threaded(pool, database, expansion_rate, dt, 0.0);
             break;
         case 2:
-            update_2d_threaded(pool, database, dt, 0.0);
-            update_2d_threaded(pool, database, dt, 0.5);
+            update_2d_threaded(pool, database, expansion_rate, dt, 0.0);
+            update_2d_threaded(pool, database, expansion_rate, dt, 0.5);
             break;
         default:
             throw std::invalid_argument("rk must be 1 or 2");
@@ -721,6 +721,7 @@ Database create_database(run_config cfg)
     auto header = Database::Header
     {
         {Field::conserved,   {5, MeshLocation::cell}},
+        {Field::primitive,   {5, MeshLocation::cell}},
         {Field::vert_coords, {2, MeshLocation::vert}},
         {Field::cell_coords, {2, MeshLocation::cell}},
         {Field::cell_volume, {1, MeshLocation::cell}},
@@ -826,7 +827,7 @@ int run(int argc, const char* argv[])
         scheduler.dispatch(sts.time);
 
         auto timer = Timer();
-        update(thread_pool, database, dt, cfg.rk);
+        update(thread_pool, database, cfg.expansion_rate, dt, cfg.rk);
 
         sts.time += dt;
         sts.iter += 1;
