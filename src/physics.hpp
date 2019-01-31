@@ -520,6 +520,7 @@ namespace sru_hydro {
     using Vars = std::array<double, 5>;
     using Unit = std::array<double, 3>;
     using Position = std::array<double, 2>;
+    using Velocity = std::array<double, 2>;
 
     struct cons_to_prim;
     struct prim_to_cons;
@@ -713,8 +714,9 @@ struct sru_hydro::riemann_hlle
 {
     riemann_hlle(Unit nhat) : nhat(nhat) {}
 
-    inline Vars operator()(Vars Pl, Vars Pr) const
+    inline Vars operator()(Vars Pl, Vars Pr, Velocity vface) const
     {
+        auto aface = vface[0] * nhat[0] + vface[1] * nhat[1];
         auto volume = std::array<double, 1> {1.0};
         auto Ul = p2c(Pl, volume);
         auto Ur = p2c(Pr, volume);
@@ -727,18 +729,43 @@ struct sru_hydro::riemann_hlle
         const double eml = *std::min_element(Al.begin(), Al.end());
         const double epr = *std::max_element(Ar.begin(), Ar.end());
         const double emr = *std::min_element(Ar.begin(), Ar.end());
-        const double ap = std::max(0.0, std::max(epl, epr));
-        const double am = std::min(0.0, std::min(eml, emr));
+        const double ap = std::max(epl, epr);
+        const double am = std::min(eml, emr);
 
         Vars U, F;
 
-        for (int q = 0; q < 5; ++q)
+        if (aface < am)
         {
-            U[q] = (ap * Ur[q] - am * Ul[q] + (Fl[q] - Fr[q])) / (ap - am);
-            F[q] = (ap * Fl[q] - am * Fr[q] - (Ul[q] - Ur[q]) * ap * am) / (ap - am);
+            for (int q = 0; q < 5; ++q)
+            {
+                U[q] = Ul[q];
+                F[q] = Fl[q];
+            }            
+        }
+        else if (aface > ap)
+        {
+            for (int q = 0; q < 5; ++q)
+            {
+                U[q] = Ur[q];
+                F[q] = Fr[q];
+            }            
+        }
+        else
+        {
+            for (int q = 0; q < 5; ++q)
+            {
+                U[q] = (ap * Ur[q] - am * Ul[q] + (Fl[q] - Fr[q])) / (ap - am);
+                F[q] = (ap * Fl[q] - am * Fr[q] - (Ul[q] - Ur[q]) * ap * am) / (ap - am);
+            }
+        }
+
+        for (auto q = 0; q < 5; ++q)
+        {
+            F[q] -= U[q] * aface;
         }
         return F;
     }
+
     Unit nhat;
     prim_to_cons p2c;
     prim_to_eval p2a;

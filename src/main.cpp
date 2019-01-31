@@ -172,18 +172,21 @@ struct MeshGeometry
         const nd::array<double, 3>& C,
         const nd::array<double, 3>& D,
         const nd::array<double, 3>& E,
-        const nd::array<double, 3>& F)
+        const nd::array<double, 3>& F,
+        const nd::array<double, 3>& G)
     : centroids_extended(A)
     , volumes_extended(B)
-    , centroids(C)
-    , volumes(D)
-    , face_areas_i(E)
-    , face_areas_j(F)
+    , vertices(C)
+    , centroids(D)
+    , volumes(E)
+    , face_areas_i(F)
+    , face_areas_j(G)
     {
     }
 
     nd::array<double, 3> centroids_extended;
     nd::array<double, 3> volumes_extended;
+    const nd::array<double, 3>& vertices;
     const nd::array<double, 3>& centroids;
     const nd::array<double, 3>& volumes;
     const nd::array<double, 3>& face_areas_i;
@@ -314,6 +317,19 @@ nd::array<double, 3> mesh_face_areas_j(const nd::array<double, 3>& verts)
     return area(args);
 }
 
+nd::array<double, 3> mesh_face_velocities_i(const nd::array<double, 3>& verts, double expansion_rate)
+{
+    auto _ = nd::axis::all();
+    auto mj = verts.shape(1);
+    auto r0 = verts.select(_, _|0|mj-1, _|0|1);
+    auto r1 = verts.select(_, _|1|mj-0, _|0|1);
+    auto vel = ufunc::vfrom([expansion_rate] (std::array<double, 1> r0, std::array<double, 1> r1)
+    {
+        return std::array<double, 2> {expansion_rate * 0.5 * (r0[0] + r1[0]), 0.0};
+    });
+    return vel(r0, r1);
+}
+
 void update_mesh_geometry_from_vertices(Database& database)
 {
     for (const auto& patch : database.all(Field::vert_coords))
@@ -331,6 +347,8 @@ void update_mesh_geometry_from_vertices(Database& database)
         database.insert(std::make_tuple(i, 0, 0, Field::face_area_j), a_faces_j);
     }
 }
+
+
 
 
 // ============================================================================
@@ -401,7 +419,7 @@ Database with_primitive(const Database& database)
 
 
 // ============================================================================
-auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
+auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double expansion_rate, double dt)
 {
     auto _ = nd::axis::all();
 
@@ -427,6 +445,8 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
         };
     };
 
+    auto face_vel_i = mesh_face_velocities_i(G.vertices, expansion_rate);
+    auto face_vel_j = nd::array<double, 3>(G.vertices.shape(0) - 1, G.vertices.shape(1) - 2, 2);
     auto gradient_est = ufunc::from(gradient_plm(2.0));
     auto advance_cons = ufunc::vfrom(update_formula);
     auto evaluate_src = ufunc::vfrom(hydro::sph_geom_src_terms());
@@ -449,7 +469,7 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
         auto Gb = gradient_est(Pa, Pb, Pc);
         auto Pl = extrap_l(Pb, Gb);
         auto Pr = extrap_r(Pb, Gb);
-        auto Fh = godunov_flux_i(Pr.take<0>(_|0|mi-3), Pl.take<0>(_|1|mi-2));
+        auto Fh = godunov_flux_i(Pr.take<0>(_|0|mi-3), Pl.take<0>(_|1|mi-2), face_vel_i);
         auto Fa = flux_times_area(Fh, G.face_areas_i);
         return Fa;
     }();
@@ -462,7 +482,7 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
         auto Gb = pad_with_zeros_j(gradient_est(Pa, Pb, Pc));
         auto Pl = extrap_l(P0.take<0>(_|2|mi-2), Gb);
         auto Pr = extrap_r(P0.take<0>(_|2|mi-2), Gb);
-        auto Fh = pad_with_zeros_j(godunov_flux_j(Pr.take<1>(_|0|mj-1), Pl.take<1>(_|1|mj)));
+        auto Fh = pad_with_zeros_j(godunov_flux_j(Pr.take<1>(_|0|mj-1), Pl.take<1>(_|1|mj), face_vel_j));
         auto Fa = flux_times_area(Fh, G.face_areas_j);
         return Fa;
     }();
@@ -479,7 +499,10 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 
 auto advance_vert(nd::array<double, 3> X0, double rate, double dt)
 {
-    auto vel = ufunc::vfrom([rate] (std::array<double, 2> x) { return std::array<double, 2> { rate * x[0], 0.0 }; });
+    auto vel = ufunc::vfrom([rate] (std::array<double, 2> x)
+    {
+        return std::array<double, 2> { rate * x[0], 0.0 };
+    });
     auto dX = vel(X0) * dt;
     return X0 + dX;
 }
@@ -499,12 +522,19 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_r
         return index;
     };
 
-    auto update_cons = [] (Database::Index index, const Database::Array& U, const MeshGeometry& G, double dt)
+    auto update_cons = [] (
+        Database::Index index,
+        const Database::Array& U,
+        const MeshGeometry& G,
+        double rate, double dt)
     {
-        return std::make_pair(index, advance_cons(U, G, dt));
+        return std::make_pair(index, advance_cons(U, G, rate, dt));
     };
 
-    auto update_vert = [rate=expansion_rate] (Database::Index index, const Database::Array& X, double dt)
+    auto update_vert = [rate=expansion_rate] (
+        Database::Index index,
+        const Database::Array& X,
+        double dt)
     {
         return std::make_pair(index, advance_vert(X, rate, dt));
     };
@@ -515,11 +545,12 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_r
         auto G = MeshGeometry(
             database.fetch(field(patch.first, Field::cell_coords), 2, 2, 0, 0),
             database.fetch(field(patch.first, Field::cell_volume), 2, 2, 0, 0),
+            database.at(patch.first, Field::vert_coords),
             database.at(patch.first, Field::cell_coords),
             database.at(patch.first, Field::cell_volume),
             database.at(patch.first, Field::face_area_i),
             database.at(patch.first, Field::face_area_j));
-        futures.push_back(pool.enqueue(update_cons, patch.first, U, G, dt));
+        futures.push_back(pool.enqueue(update_cons, patch.first, U, G, expansion_rate, dt));
     }
 
     for (const auto& patch : database.all(Field::vert_coords))
