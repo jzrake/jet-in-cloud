@@ -55,8 +55,9 @@ int main(int argc, const char* argv[])
         // --------------------------------------------------------------------
         auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
         auto X = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::cell_coords);
+        auto V = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::cell_volume);
         auto U = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::conserved);
-        auto P = cons_to_prim(U, X);
+        auto P = cons_to_prim(U, X, V);
 
         for (int j = 0; j < P.shape(1); ++j)
         {

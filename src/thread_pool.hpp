@@ -65,7 +65,7 @@ inline ThreadPool::ThreadPool(std::size_t num_threads)
             {
                 std::function<void()> task;
                 {
-                    std::unique_lock<std::mutex> lock(this->queue_mutex);
+                    std::unique_lock<std::mutex> lock(queue_mutex);
 
                     condition.wait(lock, [this] { return stop || ! tasks.empty(); });
 

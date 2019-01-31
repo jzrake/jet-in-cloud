@@ -118,8 +118,9 @@ void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int
     // Write primitive data
     // ------------------------------------------------------------------------
     auto cons = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::conserved);
+    auto vols = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::cell_volume);
     auto cell = database.assemble(0, cfg.num_blocks, 0, 1, 0, Field::cell_coords);
-    auto prim = cons_to_prim(cons, cell);
+    auto prim = cons_to_prim(cons, cell, vols);
     stream << "CELL_DATA " << prim.shape(0) * prim.shape(1) << "\n";
 
     stream << "SCALARS " << "density " << "FLOAT " << 1 << "\n";
@@ -167,19 +168,22 @@ struct MeshGeometry
 {
     MeshGeometry(
         nd::array<double, 3> A,
-        const nd::array<double, 3>& B,
+        nd::array<double, 3> B,
         const nd::array<double, 3>& C,
         const nd::array<double, 3>& D,
-        const nd::array<double, 3>& E)
+        const nd::array<double, 3>& E,
+        const nd::array<double, 3>& F)
     : centroids_extended(A)
-    , centroids(B)
-    , volumes(C)
-    , face_areas_i(D)
-    , face_areas_j(E)
+    , volumes_extended(B)
+    , centroids(C)
+    , volumes(D)
+    , face_areas_i(E)
+    , face_areas_j(F)
     {
     }
 
     nd::array<double, 3> centroids_extended;
+    nd::array<double, 3> volumes_extended;
     const nd::array<double, 3>& centroids;
     const nd::array<double, 3>& volumes;
     const nd::array<double, 3>& face_areas_i;
@@ -310,7 +314,23 @@ nd::array<double, 3> mesh_face_areas_j(const nd::array<double, 3>& verts)
     return area(args);
 }
 
+void update_mesh_geometry_from_vertices(Database& database)
+{
+    for (const auto& patch : database.all(Field::vert_coords))
+    {
+        auto i = std::get<0>(patch.first);
+        auto x_verts = patch.second;
+        auto x_cells = mesh_cell_centroids(x_verts);
+        auto v_cells = mesh_cell_volumes(x_verts);
+        auto a_faces_i = mesh_face_areas_i(x_verts);
+        auto a_faces_j = mesh_face_areas_j(x_verts);
 
+        database.insert(std::make_tuple(i, 0, 0, Field::cell_coords), x_cells);
+        database.insert(std::make_tuple(i, 0, 0, Field::cell_volume), v_cells);
+        database.insert(std::make_tuple(i, 0, 0, Field::face_area_i), a_faces_i);
+        database.insert(std::make_tuple(i, 0, 0, Field::face_area_j), a_faces_j);
+    }
+}
 
 
 // ============================================================================
@@ -352,6 +372,31 @@ struct gradient_plm
     double theta;
 };
 
+Database with_primitive(const Database& database)
+{
+    auto result = database;
+    auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
+
+    for (const auto& patch : result.all(Field::conserved))
+    {
+        try {
+            auto index = patch.first;
+            auto cons = result.at(index, Field::conserved);
+            auto vols = result.at(index, Field::cell_volume);
+            auto cell = result.at(index, Field::cell_coords);
+            auto prim = cons_to_prim(cons, cell, vols);
+    
+            std::get<3>(index) = Field::primitive;
+            result.insert(index, prim);
+        }
+        catch (const std::exception& e)
+        {
+            std::cout << "something went wrong... " << e.what() << std::endl;
+        }
+    }
+    return result;
+}
+
 
 
 
@@ -360,14 +405,14 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 {
     auto _ = nd::axis::all();
 
-    auto update_formula = [dt] (std::array<double, 5> s, std::array<double, 5> df, std::array<double, 1> dv)
+    auto update_formula = [dt] (std::array<double, 5> s, std::array<double, 5> df)
     {
         return std::array<double, 5>{
-            dt * (s[0] - df[0] / dv[0]),
-            dt * (s[1] - df[1] / dv[0]),
-            dt * (s[2] - df[2] / dv[0]),
-            dt * (s[3] - df[3] / dv[0]),
-            dt * (s[4] - df[4] / dv[0]),
+            dt * (s[0] - df[0]),
+            dt * (s[1] - df[1]),
+            dt * (s[2] - df[2]),
+            dt * (s[3] - df[3]),
+            dt * (s[4] - df[4]),
         };
     };
 
@@ -394,7 +439,7 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 
     auto mi = U0.shape(0);
     auto mj = U0.shape(1);
-    auto P0 = cons_to_prim(U0, G.centroids_extended);
+    auto P0 = cons_to_prim(U0, G.centroids_extended, G.volumes_extended);
 
     auto Fhi = [&]
     {
@@ -426,8 +471,8 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
     auto dFj = Fhj.take<1>(_|1|mj+1) - Fhj.take<1>(_|0|mj+0);
     auto dF = dFi + dFj;
 
-    auto S0 = evaluate_src(P0.take<0>(_|2|mi-2), G.centroids);
-    auto dU = advance_cons(S0, dF, G.volumes);
+    auto S0 = evaluate_src(P0.take<0>(_|2|mi-2), G.centroids, G.volumes);
+    auto dU = advance_cons(S0, dF);
 
     return U0.take<0>(_|2|mi-2) + dU;
 }
@@ -464,17 +509,18 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_r
         return std::make_pair(index, advance_vert(X, rate, dt));
     };
 
-    // for (const auto& patch : database.all(Field::conserved))
-    // {
-    //     auto U = database.fetch(patch.first, 2, 2, 0, 0);
-    //     auto G = MeshGeometry(
-    //         database.fetch(field(patch.first, Field::cell_coords), 2, 2, 0, 0),
-    //         database.at(patch.first, Field::cell_coords),
-    //         database.at(patch.first, Field::cell_volume),
-    //         database.at(patch.first, Field::face_area_i),
-    //         database.at(patch.first, Field::face_area_j));
-    //     futures.push_back(pool.enqueue(update_cons, patch.first, U, G, dt));
-    // }
+    for (const auto& patch : database.all(Field::conserved))
+    {
+        auto U = database.fetch(patch.first, 2, 2, 0, 0);
+        auto G = MeshGeometry(
+            database.fetch(field(patch.first, Field::cell_coords), 2, 2, 0, 0),
+            database.fetch(field(patch.first, Field::cell_volume), 2, 2, 0, 0),
+            database.at(patch.first, Field::cell_coords),
+            database.at(patch.first, Field::cell_volume),
+            database.at(patch.first, Field::face_area_i),
+            database.at(patch.first, Field::face_area_j));
+        futures.push_back(pool.enqueue(update_cons, patch.first, U, G, dt));
+    }
 
     for (const auto& patch : database.all(Field::vert_coords))
     {
@@ -488,21 +534,7 @@ void update_2d_threaded(ThreadPool& pool, Database& database, double expansion_r
         database.commit(result.first, result.second, rk_factor);
     }
 
-    for (const auto& patch : database.all(Field::vert_coords))
-    {
-        auto i = std::get<0>(patch.first);
-        auto x_verts = patch.second;
-        auto x_cells = mesh_cell_centroids(x_verts);
-        auto v_cells = mesh_cell_volumes(x_verts);
-        auto a_faces_i = mesh_face_areas_i(x_verts);
-        auto a_faces_j = mesh_face_areas_j(x_verts);
-
-        // database.insert(std::make_tuple(i, 0, 0, Field::vert_coords), x_verts);
-        database.insert(std::make_tuple(i, 0, 0, Field::cell_coords), x_cells);
-        database.insert(std::make_tuple(i, 0, 0, Field::cell_volume), v_cells);
-        database.insert(std::make_tuple(i, 0, 0, Field::face_area_i), a_faces_i);
-        database.insert(std::make_tuple(i, 0, 0, Field::face_area_j), a_faces_j);
-    }
+    update_mesh_geometry_from_vertices(database);
 }
 
 void update(ThreadPool& pool, Database& database, double expansion_rate, double dt, int rk)
@@ -575,7 +607,8 @@ struct jet_boundary_value
         {
             switch (edge)
             {
-                case PatchBoundary::il: return inflow_inner(patch);
+                //case PatchBoundary::il: return inflow_inner(patch);
+                case PatchBoundary::il: return zero_gradient_inner(patch);
                 case PatchBoundary::ir: return zero_gradient_outer(patch);
                 default: throw;
             }
@@ -584,6 +617,17 @@ struct jet_boundary_value
         {
             switch (edge)
             {
+                case PatchBoundary::il: return zero_gradient_inner(patch);
+                case PatchBoundary::ir: return zero_gradient_outer(patch);
+                default: throw;
+            }
+        }
+        else if (std::get<3>(index) == Field::cell_volume)
+        {
+            switch (edge)
+            {
+                // NOTE: we return wrong volumes in guard zones, because it
+                // does not matter as long as we do this consistently.
                 case PatchBoundary::il: return zero_gradient_inner(patch);
                 case PatchBoundary::ir: return zero_gradient_outer(patch);
                 default: throw;
@@ -610,26 +654,26 @@ struct jet_boundary_value
         return U;
     }
 
-    nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
-    {
-        auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
-        auto P = nd::array<double, 3>(2, patch.shape(1), 5);
+    // nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
+    // {
+    //     auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
+    //     auto P = nd::array<double, 3>(2, patch.shape(1), 5);
 
-        for (int i = 0; i < 2; ++i)
-        {
-            for (int j = 0; j < patch.shape(1); ++j)
-            {
-                auto q = M_PI * (j + 0.5) / patch.shape(1);
-                auto inflowP = jet_inlet(q);
+    //     for (int i = 0; i < 2; ++i)
+    //     {
+    //         for (int j = 0; j < patch.shape(1); ++j)
+    //         {
+    //             auto q = M_PI * (j + 0.5) / patch.shape(1);
+    //             auto inflowP = jet_inlet(q);
 
-                for (int k = 0; k < 5; ++k)
-                {
-                    P(i, j, k) = inflowP[k];
-                }
-            }
-        }
-        return prim_to_cons(P);
-    }
+    //             for (int k = 0; k < 5; ++k)
+    //             {
+    //                 P(i, j, k) = inflowP[k];
+    //             }
+    //         }
+    //     }
+    //     return prim_to_cons(P);
+    // }
 
     hydro::Vars jet_inlet(double q) const
     {
@@ -671,7 +715,7 @@ struct simple_boundary_value
     nd::array<double, 3> zero_gradient_outer(const nd::array<double, 3>& patch) const
     {
         auto _ = nd::axis::all();
-        auto U = nd::array<double, 3>(2, patch.shape(1), 5);
+        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
         U.select(0, _, _) = patch.select(patch.shape(0) - 1, _, _);
         U.select(1, _, _) = patch.select(patch.shape(0) - 1, _, _);
         return U;
@@ -680,7 +724,7 @@ struct simple_boundary_value
     nd::array<double, 3> zero_gradient_inner(const nd::array<double, 3>& patch) const
     {
         auto _ = nd::axis::all();
-        auto U = nd::array<double, 3>(2, patch.shape(1), 5);
+        auto U = nd::array<double, 3>(2, patch.shape(1), patch.shape(2));
         U.select(0, _, _) = patch.select(0, _, _);
         U.select(1, _, _) = patch.select(0, _, _);
         return U;
@@ -751,12 +795,12 @@ Database create_database(run_config cfg)
         if (cfg.test_mode)
         {
             auto initial_data = ufunc::vfrom(explosion());
-            database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
+            database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells), v_cells));
         }
         else
         {
             auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.temperature));
-            database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells)));
+            database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells), v_cells));
         }
     }
 
@@ -781,7 +825,7 @@ Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& dat
     auto task_chkpt = [&cfg, &sts, &database] (int count)
     {
         sts.chkpt_count = count + 1;
-        write_chkpt(database, cfg, sts, count);
+        write_chkpt(with_primitive(database), cfg, sts, count);
     };
 
     scheduler.repeat("write vtk", cfg.vtki, sts.vtk_count, task_vtk);

@@ -538,8 +538,13 @@ namespace sru_hydro {
 // ============================================================================
 struct sru_hydro::cons_to_prim
 {
-    inline Vars operator()(Vars U, Position X) const
+    inline Vars operator()(Vars U, Position X, std::array<double, 1> volume) const
     {
+        for (auto &u : U)
+        {
+            u /= volume[0];
+        }
+
         const double gm  = gammaLawIndex;
         const double D   = U[DDD];
         const double tau = U[TAU];
@@ -617,7 +622,7 @@ struct sru_hydro::cons_to_prim
 // ============================================================================
 struct sru_hydro::prim_to_cons
 {
-    inline Vars operator()(Vars P) const
+    inline Vars operator()(Vars P, std::array<double, 1> volume) const
     {
         const double gm1 = gammaLawIndex - 1.0;
         const double u2 = P[U11] * P[U11] + P[U22] * P[U22] + P[U33] * P[U33];
@@ -632,6 +637,10 @@ struct sru_hydro::prim_to_cons
         U[S33] = U[DDD] * P[U33] * h;
         U[TAU] = U[DDD] * W * h - P[PRE] - U[DDD];
 
+        for (auto &u : U)
+        {
+            u *= volume[0];
+        }
         return U;
     }
     double gammaLawIndex = 4. / 3;
@@ -648,7 +657,8 @@ struct sru_hydro::prim_to_flux
         const double uu = P[U11] * P[U11] + P[U22] * P[U22] + P[U33] * P[U33];
         const double vn = (P[U11] * N[0] + P[U22] * N[1] + P[U33] * N[2]) / std::sqrt(1 + uu);
 
-        auto U = prim_to_cons()(P);
+        auto volume = std::array<double, 1> {1.0};
+        auto U = prim_to_cons()(P, volume);
         auto F = Vars();
 
         F[DDD] = vn * U[DDD];
@@ -705,8 +715,9 @@ struct sru_hydro::riemann_hlle
 
     inline Vars operator()(Vars Pl, Vars Pr) const
     {
-        auto Ul = p2c(Pl);
-        auto Ur = p2c(Pr);
+        auto volume = std::array<double, 1> {1.0};
+        auto Ul = p2c(Pl, volume);
+        auto Ur = p2c(Pr, volume);
         auto Al = p2a(Pl, nhat);
         auto Ar = p2a(Pr, nhat);
         auto Fl = p2f(Pl, nhat);
@@ -740,7 +751,7 @@ struct sru_hydro::riemann_hlle
 // ============================================================================
 struct sru_hydro::sph_geom_src_terms
 {
-    inline Vars operator()(Vars P, Position X) const
+    inline Vars operator()(Vars P, Position X, std::array<double, 1> volume) const
     {
         const double r = X[0];
         const double q = X[1];
@@ -760,6 +771,10 @@ struct sru_hydro::sph_geom_src_terms
         S[3] = -dg * hg * up * (ur + uq * cot(q)) / r;
         S[4] = 0.0;
 
+        for (auto &s : S)
+        {
+            s *= volume[0];
+        }
         return S;
     }
     double cot(double x) const
