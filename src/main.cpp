@@ -825,6 +825,29 @@ Database create_database(run_config cfg)
 
 
 // ============================================================================
+struct MeshDiagnostic
+{
+    double r0, r1;
+};
+
+MeshDiagnostic get_mesh_diagnostics(const Database& db, run_config cfg)
+{
+    int i0 = 0;
+    int i1 = cfg.num_blocks - 1;
+
+    auto inner_patch = db.at(std::make_tuple(i0, 0, 0, Field::vert_coords));
+    auto outer_patch = db.at(std::make_tuple(i1, 0, 0, Field::vert_coords));
+
+    auto r0 = inner_patch(0, 0, 0);
+    auto r1 = outer_patch(outer_patch.shape(0) - 1, 0, 0);
+
+    return {r0, r1};
+}
+
+
+
+
+// ============================================================================
 Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& database)
 {
     auto scheduler = Scheduler(sts.time);
@@ -857,7 +880,6 @@ int run(int argc, const char* argv[])
     auto sts = run_status::from_config(cfg);
     auto database  = create_database(cfg);
     auto scheduler = create_scheduler(cfg, sts, database);
-    auto dt = 0.25 * M_PI / cfg.nr;
 
 
     ThreadPool thread_pool(cfg.num_threads);
@@ -872,6 +894,25 @@ int run(int argc, const char* argv[])
     database .print(std::cout);
     scheduler.print(std::cout);
 
+
+    double a = cfg.density_index;
+    double r0 = 1.0;
+    double r1 = cfg.outer_radius;
+    double d0 = cfg.jet_density;
+    double u0 = cfg.jet_velocity;
+    double g0 = std::sqrt(1.0 + u0 * u0);
+    double h0 = 1.0; // accurate when cfg.temperature is very small
+    double Mtot = 4 * M_PI / (3 - a) * std::pow(r0, a) * (std::pow(r1, 3 - a) - std::pow(r0, 3 - a));
+    double Liso = 4 * M_PI * r0 * r0 * d0 * u0 * (g0 * h0 - 1);
+    double Eiso = Liso * cfg.jet_timescale;
+
+    std::cout << std::string(52, '=') << "\n";
+    std::printf("total atmosphere mass ................ %3.2e\n", Mtot);
+    std::printf("isotropic-equivalent jet luminosity... %3.2e\n", Liso);
+    std::printf("isotropic-equivalent jet energy ...... %3.2e\n", Eiso);
+    std::printf("E-iso / M-cloud ...................... %3.2e\n", Eiso / Mtot);
+
+
     std::cout << std::string(52, '=') << "\n";
     std::cout << "Main loop:\n\n";
 
@@ -884,7 +925,10 @@ int run(int argc, const char* argv[])
         scheduler.dispatch(sts.time);
 
         auto timer = Timer();
-        auto rk_time = rk_double(sts.time);
+        auto rk_time = rk_double(sts.time);        
+        auto meshd = get_mesh_diagnostics(database, cfg);
+        auto dt = 0.25 * meshd.r0 * M_PI / cfg.nr;
+
         update(thread_pool, database, rk_time, cfg, dt, cfg.rk);
 
         sts.time = rk_time;
@@ -892,7 +936,14 @@ int run(int argc, const char* argv[])
         sts.wall += timer.seconds();
 
         auto kzps = database.num_cells(Field::conserved) / 1e3 / timer.seconds();
-        std::printf("[%04d] t=%3.3lf kzps=%3.2lf\n", sts.iter, sts.time, kzps);
+
+        std::printf("[%04d] t=%3.3lf dt=%3.2e r0=%3.2lf r1=%3.2lf kzps=%3.2lf\n",
+            sts.iter,
+            sts.time,
+            dt,
+            meshd.r0,
+            meshd.r1,
+            kzps);
         std::fflush(stdout);
     }
     scheduler.dispatch(sts.time);
