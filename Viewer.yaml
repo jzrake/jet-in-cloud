@@ -9,15 +9,14 @@ cols: [1, 100px]
 
 
 file-patterns: ['chkpt.*']
-# patches2d-required-fields: [conserved, vert_coords]
 
 
 environment:
-  component   : 1
+  component   : 0
   mapping     : (scalar-mapping vmin vmax stops)
   density     : (load-patches2d file 'primitive' component=component)
   vert_coords : (map sph-to-cart (load-patches2d file 'vert_coords'))
-  field       : $density # (map log10 density)
+  field       : (map log10 density)
   scalars     : (map to-gpu field replicate=6)
   vertices    : (map to-gpu-triangulate vert_coords)
   fields      : [Density, Radial Four Velocity, Azimuthal Four Velocity, '', Pressure]

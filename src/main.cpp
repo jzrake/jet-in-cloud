@@ -239,7 +239,6 @@ struct jet_boundary_value
             switch (edge)
             {
                 case PatchBoundary::il: return inflow_inner(patch);
-                // case PatchBoundary::il: return zero_gradient_inner(patch);
                 case PatchBoundary::ir: return zero_gradient_outer(patch);
                 default: throw;
             }
@@ -324,6 +323,9 @@ struct jet_boundary_value
         auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
         auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
         auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg};
+
+        // std::cout << q << ": " << hydro::prim_to_cons()(inflowP, {1.0})[4] << std::endl;
+
         return inflowP;
     }
 
@@ -345,7 +347,8 @@ struct MeshGeometry
         const nd::array<double, 3>& D,
         const nd::array<double, 3>& E,
         const nd::array<double, 3>& F,
-        const nd::array<double, 3>& G)
+        const nd::array<double, 3>& G,
+        const nd::array<double, 3>& H)
     : centroids_extended(A)
     , volumes_extended(B)
     , vertices(C)
@@ -353,6 +356,7 @@ struct MeshGeometry
     , volumes(E)
     , face_areas_i(F)
     , face_areas_j(G)
+    , face_velocities(H)
     {
     }
 
@@ -363,6 +367,7 @@ struct MeshGeometry
     const nd::array<double, 3>& volumes;
     const nd::array<double, 3>& face_areas_i;
     const nd::array<double, 3>& face_areas_j;
+    const nd::array<double, 3>& face_velocities;
 };
 
 
@@ -591,7 +596,7 @@ Database with_primitive(const Database& database)
 
 
 // ============================================================================
-auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double expansion_rate, double dt)
+auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 {
     auto _ = nd::axis::all();
 
@@ -617,7 +622,7 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double expansi
         };
     };
 
-    auto face_vel_i = mesh_face_velocities_i(G.vertices, expansion_rate);
+    auto face_vel_i = G.face_velocities;
     auto face_vel_j = nd::array<double, 3>(G.vertices.shape(0) - 1, G.vertices.shape(1) - 2, 2);
     auto gradient_est = ufunc::from(gradient_plm(2.0));
     auto advance_cons = ufunc::vfrom(update_formula);
@@ -669,14 +674,20 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double expansi
     return U0.take<0>(_|2|mi-2) + dU;
 }
 
-auto advance_vert(nd::array<double, 3> X0, double rate, double dt)
+auto advance_vert(nd::array<double, 3> X0, nd::array<double, 3> face_vel, double dt)
 {
-    auto vel = ufunc::vfrom([rate] (std::array<double, 2> x)
-    {
-        return std::array<double, 2> { rate * x[0], 0.0 };
-    });
-    auto dX = vel(X0) * dt;
-    return X0 + dX;
+    // This is a kludge to evaluate the vertex radial velocities from the
+    // faces. The correct way would be to put the vertex velocities in the
+    // database. Instead, I'm taking advantage here of the fact that the
+    // radial velocity is the same at all polar angles, so I'm simply shifting
+    // the velocity data from faces to edges, and then copying the data for
+    // the vertex at the north pole.
+
+    auto _ = nd::axis::all();
+    auto V = X0.copy();
+    V.select(_, _|1|V.shape(1), _) = face_vel;
+    V.select(_, _|0|1, _) = face_vel.select(_, _|0|1, _);
+    return X0 + V * dt;
 }
 
 
@@ -698,17 +709,18 @@ void update_2d_threaded(ThreadPool& pool, Database& database, rk_double& t, jic:
         Database::Index index,
         const Database::Array& U,
         const MeshGeometry& G,
-        double rate, double dt)
-    {
-        return std::make_pair(index, advance_cons(U, G, rate, dt));
-    };
-
-    auto update_vert = [rate=cfg.expansion_rate] (
-        Database::Index index,
-        const Database::Array& X,
         double dt)
     {
-        return std::make_pair(index, advance_vert(X, rate, dt));
+        return std::make_pair(index, advance_cons(U, G, dt));
+    };
+
+    auto update_vert = [] (
+        Database::Index index,
+        const Database::Array& X,
+        const Database::Array& V,
+        double dt)
+    {
+        return std::make_pair(index, advance_vert(X, V, dt));
     };
 
     database.set_boundary_value(jet_boundary_value(cfg, t));
@@ -723,14 +735,16 @@ void update_2d_threaded(ThreadPool& pool, Database& database, rk_double& t, jic:
             database.at(patch.first, Field::cell_coords),
             database.at(patch.first, Field::cell_volume),
             database.at(patch.first, Field::face_area_i),
-            database.at(patch.first, Field::face_area_j));
-        futures.push_back(pool.enqueue(update_cons, patch.first, U, G, cfg.expansion_rate, dt));
+            database.at(patch.first, Field::face_area_j),
+            database.at(patch.first, Field::face_velocity_i));
+        futures.push_back(pool.enqueue(update_cons, patch.first, U, G, dt));
     }
 
     for (const auto& patch : database.all(Field::vert_coords))
     {
         auto X = database.at(patch.first);
-        futures.push_back(pool.enqueue(update_vert, patch.first, X, dt));
+        auto V = database.at(patch.first, Field::face_velocity_i);
+        futures.push_back(pool.enqueue(update_vert, patch.first, X, V, dt));
     }
 
     for (auto& future : futures)
@@ -786,6 +800,7 @@ Database create_database(run_config cfg)
         {Field::cell_volume, {1, MeshLocation::cell}},
         {Field::face_area_i, {1, MeshLocation::face_i}},
         {Field::face_area_j, {1, MeshLocation::face_j}},
+        {Field::face_velocity_i, {2, MeshLocation::face_i}},
     };
     auto database = Database(ni, nj, header);
     auto prim_to_cons = ufunc::vfrom(hydro::prim_to_cons());
@@ -800,12 +815,14 @@ Database create_database(run_config cfg)
         auto v_cells = mesh_cell_volumes(x_verts);
         auto a_faces_i = mesh_face_areas_i(x_verts);
         auto a_faces_j = mesh_face_areas_j(x_verts);
+        auto v_faces_i = mesh_face_velocities_i(x_verts, cfg.expansion_rate);
 
         database.insert(std::make_tuple(i, 0, 0, Field::vert_coords), x_verts);
         database.insert(std::make_tuple(i, 0, 0, Field::cell_coords), x_cells);
         database.insert(std::make_tuple(i, 0, 0, Field::cell_volume), v_cells);
         database.insert(std::make_tuple(i, 0, 0, Field::face_area_i), a_faces_i);
         database.insert(std::make_tuple(i, 0, 0, Field::face_area_j), a_faces_j);
+        database.insert(std::make_tuple(i, 0, 0, Field::face_velocity_i), v_faces_i);
 
         if (cfg.test_mode)
         {
@@ -905,12 +922,14 @@ int run(int argc, const char* argv[])
     double Mtot = 4 * M_PI / (3 - a) * std::pow(r0, a) * (std::pow(r1, 3 - a) - std::pow(r0, 3 - a));
     double Liso = 4 * M_PI * r0 * r0 * d0 * u0 * (g0 * h0 - 1);
     double Eiso = Liso * cfg.jet_timescale;
+    double Ejet = Eiso * 2 * std::pow(cfg.jet_opening_angle, 2); // there are two jets
 
     std::cout << std::string(52, '=') << "\n";
     std::printf("total atmosphere mass ................ %3.2e\n", Mtot);
     std::printf("isotropic-equivalent jet luminosity... %3.2e\n", Liso);
     std::printf("isotropic-equivalent jet energy ...... %3.2e\n", Eiso);
     std::printf("E-iso / M-cloud ...................... %3.2e\n", Eiso / Mtot);
+    std::printf("E-jet / M-cloud ...................... %3.2e\n", Ejet / Mtot);
 
 
     std::cout << std::string(52, '=') << "\n";
