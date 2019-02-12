@@ -506,6 +506,7 @@ namespace sru_hydro {
         U22 = 2,
         U33 = 3,
         PRE = 4,
+        SCA = 5,
     };
 
     // Indexes to conserved quanitites U
@@ -515,9 +516,10 @@ namespace sru_hydro {
         S22 = 2,
         S33 = 3,
         TAU = 4,
+        LAR = 5,
     };
 
-    using Vars = std::array<double, 5>;
+    using Vars = std::array<double, 6>;
     using Unit = std::array<double, 3>;
     using Position = std::array<double, 2>;
     using Velocity = std::array<double, 2>;
@@ -589,6 +591,7 @@ struct sru_hydro::cons_to_prim
 
         auto P = Vars();
 
+        P[SCA] = U[LAR] / W0;
         P[RHO] = D / W0;
         P[PRE] = p;
         P[U11] = W0 * U[S11] / (tau + D + p);
@@ -632,6 +635,7 @@ struct sru_hydro::prim_to_cons
         const double h = 1.0 + e + P[PRE] / P[RHO];
         auto U = Vars();
 
+        U[LAR] = P[SCA] * W;
         U[DDD] = P[RHO] * W;
         U[S11] = U[DDD] * P[U11] * h;
         U[S22] = U[DDD] * P[U22] * h;
@@ -662,6 +666,7 @@ struct sru_hydro::prim_to_flux
         auto U = prim_to_cons()(P, volume);
         auto F = Vars();
 
+        F[LAR] = vn * U[LAR];
         F[DDD] = vn * U[DDD];
         F[S11] = vn * U[S11] + P[PRE] * N[0];
         F[S22] = vn * U[S22] + P[PRE] * N[1];
@@ -699,7 +704,8 @@ struct sru_hydro::prim_to_eval
         A[1] = vn;
         A[2] = vn;
         A[3] = vn;
-        A[4] = (vn * (1 - cs2) + K) / (1 - vv * cs2);
+        A[4] = vn; // scalar
+        A[5] = (vn * (1 - cs2) + K) / (1 - vv * cs2);
 
         return A;
     }
@@ -736,7 +742,7 @@ struct sru_hydro::riemann_hlle
 
         if (aface < am)
         {
-            for (int q = 0; q < 5; ++q)
+            for (int q = 0; q < 6; ++q)
             {
                 U[q] = Ul[q];
                 F[q] = Fl[q];
@@ -744,7 +750,7 @@ struct sru_hydro::riemann_hlle
         }
         else if (aface > ap)
         {
-            for (int q = 0; q < 5; ++q)
+            for (int q = 0; q < 6; ++q)
             {
                 U[q] = Ur[q];
                 F[q] = Fr[q];
@@ -752,14 +758,14 @@ struct sru_hydro::riemann_hlle
         }
         else
         {
-            for (int q = 0; q < 5; ++q)
+            for (int q = 0; q < 6; ++q)
             {
                 U[q] = (ap * Ur[q] - am * Ul[q] + (Fl[q] - Fr[q])) / (ap - am);
                 F[q] = (ap * Fl[q] - am * Fr[q] - (Ul[q] - Ur[q]) * ap * am) / (ap - am);
             }
         }
 
-        for (auto q = 0; q < 5; ++q)
+        for (auto q = 0; q < 6; ++q)
         {
             F[q] -= U[q] * aface;
         }
@@ -792,11 +798,12 @@ struct sru_hydro::sph_geom_src_terms
         const double hg = 1.0 + eg + pg / dg;
         auto S = Vars();
 
-        S[0] = 0.0;
-        S[1] = (2      * pg + dg * hg * (uq * uq          + up * up)) / r;
-        S[2] = (cot(q) * pg + dg * hg * (up * up * cot(q) - ur * uq)) / r;
-        S[3] = -dg * hg * up * (ur + uq * cot(q)) / r;
-        S[4] = 0.0;
+        S[LAR] = 0.0;
+        S[DDD] = 0.0;
+        S[S11] = (2      * pg + dg * hg * (uq * uq          + up * up)) / r;
+        S[S22] = (cot(q) * pg + dg * hg * (up * up * cot(q) - ur * uq)) / r;
+        S[S33] = -dg * hg * up * (ur + uq * cot(q)) / r;
+        S[TAU] = 0.0;
 
         for (auto &s : S)
         {
@@ -818,8 +825,8 @@ struct sru_hydro::sph_geom_src_terms
 std::string sru_hydro::to_string(sru_hydro::Vars V)
 {
     char res[1024];
-    std::snprintf(res, 1024, "[%4.3e %4.3e %4.3e %4.3e %4.3e]",
-        V[0], V[1], V[2], V[3], V[4]);
+    std::snprintf(res, 1024, "[%4.3e %4.3e %4.3e %4.3e %4.3e %4.3e]",
+        V[0], V[1], V[2], V[3], V[4], V[5]);
     return res;
 }
 

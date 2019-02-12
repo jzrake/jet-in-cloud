@@ -14,21 +14,34 @@ file-patterns: ['chkpt.*']
 environment:
   component    : 0
   mapping      : (scalar-mapping vmin vmax stops)
-  scale        : (item (list log10 noscale log10 log10) component)
-  fields       : [Log Density, Radial Gamma-Beta, Log P/rho, Log T-0r]
+  scale        : (item (list log10 noscale log10 log10 noscale) component)
+  fields       : [Log Density, Radial Gamma-Beta, Log P/rho, Log T-0r, Scalar]
   vert-coords  : (map sph-to-cart (load-patches2d file 'vert_coords'))
   cell-coords  : (load-patches2d file 'cell_coords')
   density      : (load-patches2d file 'primitive' component=0)
   gamma-beta-r : (load-patches2d file 'primitive' component=1)
   gamma-beta-q : (load-patches2d file 'primitive' component=2)
   pressure     : (load-patches2d file 'primitive' component=4)
+  scalar       : (load-patches2d file 'primitive' component=5)
   cs2          : (map div pressure density)
   energy-flux  : (map jic-energy-flux cell-coords pressure density gamma-beta-r gamma-beta-q)
-  field        : (map scale (item (list density gamma-beta-r cs2 energy-flux) component))
+  field        : (map scale (item (list density gamma-beta-r cs2 energy-flux scalar) component))
   scalars      : (map to-gpu field replicate=6)
   vertices     : (map to-gpu-triangulate vert-coords)
 
-expensive: [vert-coords, cell-coords, density, gamma-beta, pressure, cs2, field, scalars, vertices, energy-flux]
+
+expensive:
+  - vert-coords
+  - cell-coords
+  - density
+  - gamma-beta
+  - pressure
+  - cs2
+  - field
+  - scalars
+  - vertices
+  - energy-flux
+
 
 commands:
   reset-scalar-range:

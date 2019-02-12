@@ -195,11 +195,11 @@ struct atmosphere
     {
     }
 
-    inline std::array<double, 5> operator()(std::array<double, 2> X) const
+    inline std::array<double, 6> operator()(std::array<double, 2> X) const
     {
         const double r = X[0];
         const double a = density_index;
-        return std::array<double, 5>{std::pow(r, -a), 0.0, 0.0, 0.0, temperature * std::pow(r, -a)};
+        return std::array<double, 6>{std::pow(r, -a), 0.0, 0.0, 0.0, temperature * std::pow(r, -a)};
     }
     double density_index;
     double temperature;
@@ -211,11 +211,11 @@ struct atmosphere
 // ============================================================================
 struct explosion
 {
-    inline std::array<double, 5> operator()(std::array<double, 2> X) const
+    inline std::array<double, 6> operator()(std::array<double, 2> X) const
     {
         double d = X[0] < 2 ? 1.0 : 0.1;
         double p = X[0] < 2 ? 1.0 : 0.125;
-        return std::array<double, 5>{d, 0.0, 0.0, 0.0, p};
+        return std::array<double, 6>{d, 0.0, 0.0, 0.0, p, 0.0};
     }
 };
 
@@ -295,7 +295,7 @@ struct jet_boundary_value
     nd::array<double, 3> inflow_inner(const nd::array<double, 3>& patch) const
     {
         auto prim_to_cons = ufunc::vfrom([p2c=hydro::prim_to_cons()] (hydro::Vars P) { return p2c(P, {1.0}); });
-        auto P = nd::array<double, 3>(2, patch.shape(1), 5);
+        auto P = nd::array<double, 3>(2, patch.shape(1), 6);
 
         for (int i = 0; i < 2; ++i)
         {
@@ -304,7 +304,7 @@ struct jet_boundary_value
                 auto q = M_PI * (j + 0.5) / patch.shape(1);
                 auto inflowP = jet_inlet(q);
 
-                for (int k = 0; k < 5; ++k)
+                for (int k = 0; k < 6; ++k)
                 {
                     P(i, j, k) = inflowP[k];
                 }
@@ -322,7 +322,8 @@ struct jet_boundary_value
         auto dq = cfg.jet_opening_angle;
         auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
         auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
-        auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg};
+        auto scalar = 1.0;
+        auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg, scalar};
 
         // std::cout << q << ": " << hydro::prim_to_cons()(inflowP, {1.0})[4] << std::endl;
 
@@ -600,25 +601,27 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 {
     auto _ = nd::axis::all();
 
-    auto update_formula = [dt] (std::array<double, 5> s, std::array<double, 5> df)
+    auto update_formula = [dt] (std::array<double, 6> s, std::array<double, 6> df)
     {
-        return std::array<double, 5>{
+        return std::array<double, 6>{
             dt * (s[0] - df[0]),
             dt * (s[1] - df[1]),
             dt * (s[2] - df[2]),
             dt * (s[3] - df[3]),
             dt * (s[4] - df[4]),
+            dt * (s[5] - df[5]),
         };
     };
 
-    auto flux_times_area_formula = [] (std::array<double, 5> f, std::array<double, 1> da)
+    auto flux_times_area_formula = [] (std::array<double, 6> f, std::array<double, 1> da)
     {
-        return std::array<double, 5>{
+        return std::array<double, 6>{
             f[0] * da[0],
             f[1] * da[0],
             f[2] * da[0],
             f[3] * da[0],
             f[4] * da[0],
+            f[5] * da[0],
         };
     };
 
@@ -793,8 +796,8 @@ Database create_database(run_config cfg)
     auto nj = cfg.nr;
     auto header = Database::Header
     {
-        {Field::conserved,   {5, MeshLocation::cell}},
-        {Field::primitive,   {5, MeshLocation::cell}},
+        {Field::conserved,   {6, MeshLocation::cell}},
+        {Field::primitive,   {6, MeshLocation::cell}},
         {Field::vert_coords, {2, MeshLocation::vert}},
         {Field::cell_coords, {2, MeshLocation::cell}},
         {Field::cell_volume, {1, MeshLocation::cell}},
