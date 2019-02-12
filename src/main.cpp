@@ -52,6 +52,67 @@ void write_swapped_bytes_and_clear(std::ostream& os, std::vector<T>& buffer)
 
 
 
+//=============================================================================
+struct GlobalDiagnostic
+{
+    double energy = 0;
+    double mass = 0;
+};
+
+std::array<GlobalDiagnostic, 2> measureGlobalDiagnostics(const Database& db)
+{
+    GlobalDiagnostic jet, cloud;
+
+    for (const auto& patch : db.all(Field::conserved))
+    {
+        const auto& U = patch.second;
+        // const auto& P = db.at(patch.first, Field::primitive);
+
+        for (int i = 0; i < U.shape(0); ++i)
+        {
+            for (int j = 0; j < U.shape(1); ++j)
+            {
+                double fluidEnergy = U(i, j, hydro::TAU);
+                double fluidMass   = U(i, j, hydro::DDD);
+                double scalarMass  = U(i, j, hydro::LAR);
+                double specificScalar = scalarMass / fluidMass;
+
+                jet  .mass   += fluidMass * (0 + specificScalar);
+                cloud.mass   += fluidMass * (1 - specificScalar);
+                jet  .energy += fluidEnergy * (0 + specificScalar);
+                cloud.energy += fluidEnergy * (1 - specificScalar);
+            }
+        }
+    }
+    return {jet, cloud};
+}
+
+
+
+
+// ============================================================================
+struct MeshDiagnostic
+{
+    double r0, r1;
+};
+
+MeshDiagnostic get_mesh_diagnostics(const Database& db, run_config cfg)
+{
+    int i0 = 0;
+    int i1 = cfg.num_blocks - 1;
+
+    auto inner_patch = db.at(std::make_tuple(i0, 0, 0, Field::vert_coords));
+    auto outer_patch = db.at(std::make_tuple(i1, 0, 0, Field::vert_coords));
+
+    auto r0 = inner_patch(0, 0, 0);
+    auto r1 = outer_patch(outer_patch.shape(0) - 1, 0, 0);
+
+    return {r0, r1};
+}
+
+
+
+
 // ============================================================================
 void write_chkpt(const Database& database, run_config cfg, run_status sts, int count)
 {
@@ -68,6 +129,42 @@ void write_chkpt(const Database& database, run_config cfg, run_status sts, int c
 
     cfg.tojson(cfg_stream);
     sts.tojson(sts_stream);
+}
+
+void write_tseries(std::array<GlobalDiagnostic, 2> diagnostics, run_config cfg, run_status sts, int count)
+{
+    auto logfname = cfg.make_filename_tseries();
+
+    FILE* outf = nullptr;
+
+    if (count == 0)
+    {
+        outf = std::fopen(logfname.data(), "w");
+
+        if (! outf)
+        {
+            throw std::runtime_error("unable to create tseries file " + logfname);
+        }
+        std::fprintf(outf, "# Iter Time JetMass JetEnergy CloudMass CloudEnergy\n");
+    }
+    else
+    {
+        outf = std::fopen(logfname.data(), "a");
+
+        if (! outf)
+        {
+            throw std::runtime_error("unable to open tseries file " + logfname);            
+        }
+    }
+
+    std::fprintf(outf, "%08d %4.3e %4.3e %4.3e %4.3e %4.3e\n",
+        sts.iter,
+        sts.time,
+        diagnostics[0].mass,
+        diagnostics[0].energy,
+        diagnostics[1].mass,
+        diagnostics[1].energy);
+    std::fclose(outf);
 }
 
 void write_vtk(const Database& database, run_config cfg, run_status /*sts*/, int count)
@@ -845,29 +942,6 @@ Database create_database(run_config cfg)
 
 
 // ============================================================================
-struct MeshDiagnostic
-{
-    double r0, r1;
-};
-
-MeshDiagnostic get_mesh_diagnostics(const Database& db, run_config cfg)
-{
-    int i0 = 0;
-    int i1 = cfg.num_blocks - 1;
-
-    auto inner_patch = db.at(std::make_tuple(i0, 0, 0, Field::vert_coords));
-    auto outer_patch = db.at(std::make_tuple(i1, 0, 0, Field::vert_coords));
-
-    auto r0 = inner_patch(0, 0, 0);
-    auto r1 = outer_patch(outer_patch.shape(0) - 1, 0, 0);
-
-    return {r0, r1};
-}
-
-
-
-
-// ============================================================================
 Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& database)
 {
     auto scheduler = Scheduler(sts.time);
@@ -884,8 +958,16 @@ Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& dat
         write_chkpt(with_primitive(database), cfg, sts, count);
     };
 
+    auto task_tseries = [&cfg, &sts, &database] (int count)
+    {
+        sts.tseries_count = count + 1;
+        auto result = measureGlobalDiagnostics(database);
+        write_tseries(result, cfg, sts, count);
+    };
+
     scheduler.repeat("write vtk", cfg.vtki, sts.vtk_count, task_vtk);
     scheduler.repeat("write checkpoint", cfg.cpi, sts.chkpt_count, task_chkpt);
+    scheduler.repeat("get diagnostics", cfg.tsi, sts.tseries_count, task_tseries);
 
     return scheduler;
 }

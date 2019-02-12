@@ -36,11 +36,12 @@ struct jic::run_status
     }
 
     /** Data members */
-    double time     = 0.0;
-    double wall     = 0.0;
-    int iter        = 0;
-    int vtk_count   = 0;
-    int chkpt_count = 0;
+    double time       = 0.0;
+    double wall       = 0.0;
+    int iter          = 0;
+    int vtk_count     = 0;
+    int chkpt_count   = 0;
+    int tseries_count = 0;
 };
 
 
@@ -59,6 +60,7 @@ struct jic::run_config
     std::string make_filename_vtk(int count) const;
     std::string make_filename_status(int count) const;
     std::string make_filename_config(int count) const;
+    std::string make_filename_tseries() const;
 
     template<typename Callable>
     void foreach(Callable f)
@@ -75,6 +77,7 @@ struct jic::run_config
     double tfinal       = 0.1;
     double cpi          = 1.0;
     double vtki         = 0.0;
+    double tsi          = 0.1;
     int rk              = 1;
     int nr              = 32;
     int num_threads     = 1;

@@ -9,13 +9,14 @@ using namespace jic;
 
 
 // ============================================================================
-VISITABLE_STRUCT(run_status, time, wall, iter, vtk_count, chkpt_count);
+VISITABLE_STRUCT(run_status, time, wall, iter, vtk_count, chkpt_count, tseries_count);
 VISITABLE_STRUCT(run_config,
     outdir,
     restart,
     tfinal,
     cpi,
     vtki,
+    tsi,
     rk,
     nr,
     expansion_rate,
@@ -213,4 +214,9 @@ std::string run_config::make_filename_status(int count) const
 std::string run_config::make_filename_config(int count) const
 {
     return filesystem::join({make_filename_chkpt(count), "config.json"});
+}
+
+std::string run_config::make_filename_tseries() const
+{
+    return filesystem::join({outdir, "tseries.dat"});
 }
