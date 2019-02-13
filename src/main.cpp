@@ -419,7 +419,7 @@ struct jet_boundary_value
         auto dq = cfg.jet_opening_angle;
         auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
         auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
-        auto scalar = 1.0;
+        auto scalar = dg;
         auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg, scalar};
 
         // std::cout << q << ": " << hydro::prim_to_cons()(inflowP, {1.0})[4] << std::endl;
