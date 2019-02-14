@@ -999,7 +999,7 @@ Scheduler create_scheduler(run_config& cfg, run_status& sts, const Database& dat
     auto task_tseries = [&cfg, &sts, &database] (int count)
     {
         sts.tseries_count = count + 1;
-        auto result = measureGlobalDiagnostics(database);
+        auto result = measureGlobalDiagnostics(with_primitive(database));
         write_tseries(result, cfg, sts, count);
     };
 
