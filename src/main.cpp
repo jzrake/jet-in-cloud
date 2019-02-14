@@ -55,7 +55,8 @@ void write_swapped_bytes_and_clear(std::ostream& os, std::vector<T>& buffer)
 //=============================================================================
 struct GlobalDiagnostic
 {
-    double energy = 0;
+    double kineticEnergy = 0;
+    double thermalEnergy = 0;
     double mass = 0;
 };
 
@@ -66,7 +67,7 @@ std::array<GlobalDiagnostic, 2> measureGlobalDiagnostics(const Database& db)
     for (const auto& patch : db.all(Field::conserved))
     {
         const auto& U = patch.second;
-        // const auto& P = db.at(patch.first, Field::primitive);
+        const auto& P = db.at(patch.first, Field::primitive);
 
         for (int i = 0; i < U.shape(0); ++i)
         {
@@ -77,10 +78,24 @@ std::array<GlobalDiagnostic, 2> measureGlobalDiagnostics(const Database& db)
                 double scalarMass  = U(i, j, hydro::LAR);
                 double specificScalar = scalarMass / fluidMass;
 
-                jet  .mass   += fluidMass * (0 + specificScalar);
-                cloud.mass   += fluidMass * (1 - specificScalar);
-                jet  .energy += fluidEnergy * (0 + specificScalar);
-                cloud.energy += fluidEnergy * (1 - specificScalar);
+                double d0 = P(i, j, hydro::RHO);
+                double p0 = P(i, j, hydro::PRE);
+                double ur = P(i, j, hydro::U11);
+                double uq = P(i, j, hydro::U22);
+                double u0 = std::sqrt(1.0 + ur * ur + uq * uq);
+                double e0 = p0 / d0 / (4. / 3 - 1);
+                double h0 = 1.0 + e0 + p0 / d0;
+                double fluidEnergyDensity = d0 * h0 * u0 * u0 - p0 - d0 * u0;
+                double volume = fluidEnergy / fluidEnergyDensity;
+                double fluidKineticEnergy = volume * (d0 * u0 * (u0 - 1.0));
+                double fluidThermalEnergy = volume * ((h0 - 1.0) * d0 * u0 * u0 - p0);
+
+                jet  .mass          += fluidMass * (0 + specificScalar);
+                cloud.mass          += fluidMass * (1 - specificScalar);
+                jet  .kineticEnergy += fluidKineticEnergy * (0 + specificScalar);
+                cloud.kineticEnergy += fluidKineticEnergy * (1 - specificScalar);
+                jet  .thermalEnergy += fluidThermalEnergy * (0 + specificScalar);
+                cloud.thermalEnergy += fluidThermalEnergy * (1 - specificScalar);
             }
         }
     }
@@ -145,7 +160,7 @@ void write_tseries(std::array<GlobalDiagnostic, 2> diagnostics, run_config cfg, 
         {
             throw std::runtime_error("unable to create tseries file " + logfname);
         }
-        std::fprintf(outf, "# Iter Time JetMass JetEnergy CloudMass CloudEnergy\n");
+        std::fprintf(outf, "# Iter Time JetMass JetKineticEnergy JetThermalEnergy CloudMass CloudKineticEnergy CloudThermalEnergy\n");
     }
     else
     {
@@ -157,13 +172,15 @@ void write_tseries(std::array<GlobalDiagnostic, 2> diagnostics, run_config cfg, 
         }
     }
 
-    std::fprintf(outf, "%08d %4.3e %4.3e %4.3e %4.3e %4.3e\n",
+    std::fprintf(outf, "%08d %4.3e %4.3e %4.3e %4.3e %4.3e %4.3e %4.3e\n",
         sts.iter,
         sts.time,
         diagnostics[0].mass,
-        diagnostics[0].energy,
+        diagnostics[0].kineticEnergy,
+        diagnostics[0].thermalEnergy,
         diagnostics[1].mass,
-        diagnostics[1].energy);
+        diagnostics[1].kineticEnergy,
+        diagnostics[1].thermalEnergy);
     std::fclose(outf);
 }
 
