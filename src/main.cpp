@@ -323,7 +323,7 @@ struct explosion
 // ============================================================================
 struct jet_boundary_value
 {
-    jet_boundary_value(jic::run_config cfg, double t) : cfg(cfg), t(t) {}
+    jet_boundary_value(jic::run_config cfg, double t, double r1) : cfg(cfg), t(t), r1(r1) {}
 
     nd::array<double, 3> operator()(
         Database::Index index,
@@ -336,7 +336,7 @@ struct jet_boundary_value
             switch (edge)
             {
                 case PatchBoundary::il: return inflow_inner(patch);
-                case PatchBoundary::ir: return zero_gradient_outer(patch);
+                case PatchBoundary::ir: return sample_outer(patch);
                 default: throw;
             }
         }
@@ -353,9 +353,9 @@ struct jet_boundary_value
         {
             switch (edge)
             {
-                // NOTE: inner guard zones are given arbitrary volume value of 1.
+                // NOTE: inner and outer guard zones are given arbitrary volume of 1.
                 case PatchBoundary::il: return ones(patch);
-                case PatchBoundary::ir: return zero_gradient_outer(patch);
+                case PatchBoundary::ir: return ones(patch);
                 default: throw;
             }            
         }
@@ -421,15 +421,35 @@ struct jet_boundary_value
         auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
         auto scalar = dg;
         auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg, scalar};
-
-        // std::cout << q << ": " << hydro::prim_to_cons()(inflowP, {1.0})[4] << std::endl;
-
         return inflowP;
+    }
+
+    nd::array<double, 3> sample_outer(const nd::array<double, 3>& patch) const
+    {
+        auto prim_to_cons = ufunc::vfrom([p2c=hydro::prim_to_cons()] (hydro::Vars P) { return p2c(P, {1.0}); });
+        auto P = nd::array<double, 3>(2, patch.shape(1), 6);
+        auto atm = atmosphere(cfg.density_index, cfg.temperature);
+
+        for (int i = 0; i < 2; ++i)
+        {
+            for (int j = 0; j < patch.shape(1); ++j)
+            {
+                auto q = M_PI * (j + 0.5) / patch.shape(1);
+                auto outerP = atm({r1, q});
+
+                for (int k = 0; k < 6; ++k)
+                {
+                    P(i, j, k) = outerP[k];
+                }
+            }
+        }
+        return prim_to_cons(P);
     }
 
 private:
     run_config cfg;
     double t;
+    double r1;
 };
 
 
@@ -823,7 +843,8 @@ void update_2d_threaded(ThreadPool& pool, Database& database, rk_double& t, jic:
         return std::make_pair(index, advance_vert(X, V, dt));
     };
 
-    database.set_boundary_value(jet_boundary_value(cfg, t));
+    auto meshd = get_mesh_diagnostics(database, cfg);
+    database.set_boundary_value(jet_boundary_value(cfg, t, meshd.r1));
 
     for (const auto& patch : database.all(Field::conserved))
     {
