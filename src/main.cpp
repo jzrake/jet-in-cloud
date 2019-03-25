@@ -434,8 +434,8 @@ struct jet_boundary_value
         auto u0 = cfg.jet_velocity * std::exp(-t / cfg.jet_timescale);
         auto dg = cfg.jet_density;
         auto dq = cfg.jet_opening_angle;
-        auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, 2));
-        auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, 2));
+        auto f0 = u0 * std::exp(-std::pow((q - q0) / dq, cfg.jet_structure_exp));
+        auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, cfg.jet_structure_exp));
         auto scalar = dg;
         auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg, scalar};
         return inflowP;
@@ -516,7 +516,6 @@ nd::array<double, 3> mesh_vertices(int ni, int nj, std::array<double, 4> extent)
     auto x1 = extent[1];
     auto y0 = extent[2];
     auto y1 = extent[3];
-
     for (int i = 0; i < ni + 1; ++i)
     {
         for (int j = 0; j < nj + 1; ++j)
@@ -761,7 +760,7 @@ auto advance_cons(nd::array<double, 3> U0, const MeshGeometry& G, double dt)
 
     auto face_vel_i = G.face_velocities;
     auto face_vel_j = nd::array<double, 3>(G.vertices.shape(0) - 1, G.vertices.shape(1) - 2, 2);
-    auto gradient_est = ufunc::from(gradient_plm(2.0));
+    auto gradient_est = ufunc::from(gradient_plm(1.5));
     auto advance_cons = ufunc::vfrom(update_formula);
     auto evaluate_src = ufunc::vfrom(hydro::sph_geom_src_terms());
     auto cons_to_prim = ufunc::vfrom(hydro::cons_to_prim());
@@ -928,7 +927,7 @@ Database create_database(run_config cfg)
     auto block_size = target_radial_zone_count / cfg.num_blocks;
 
     auto ni = block_size;
-    auto nj = cfg.nr;
+    auto nj = cfg.nq ? cfg.nq : cfg.nr;
     auto header = Database::Header
     {
         {Field::conserved,   {6, MeshLocation::cell}},
@@ -1031,7 +1030,7 @@ int run(int argc, const char* argv[])
     std::cout << "\n";
     cfg      .print(std::cout);
     sts      .print(std::cout);
-    database .print(std::cout);
+    // database .print(std::cout);
     scheduler.print(std::cout);
 
 
@@ -1042,17 +1041,19 @@ int run(int argc, const char* argv[])
     double u0 = cfg.jet_velocity;
     double g0 = std::sqrt(1.0 + u0 * u0);
     double h0 = 1.0; // accurate when cfg.temperature is very small
-    double Mtot = 4 * M_PI / (3 - a) * std::pow(r0, a) * (std::pow(r1, 3 - a) - std::pow(r0, 3 - a));
+    double Mtot = 4 * M_PI * (a == 3 ? std::log(r1 / r0) : 1.0 / (3 - a) * std::pow(r0, a) * (std::pow(r1, 3 - a) - std::pow(r0, 3 - a)));
     double Liso = 4 * M_PI * r0 * r0 * d0 * u0 * (g0 * h0 - 1);
     double Eiso = Liso * cfg.jet_timescale;
     double Ejet = Eiso * 2 * std::pow(cfg.jet_opening_angle, 2); // there are two jets
 
     std::cout << std::string(52, '=') << "\n";
-    std::printf("total atmosphere mass ................ %3.2e\n", Mtot);
-    std::printf("isotropic-equivalent jet luminosity... %3.2e\n", Liso);
-    std::printf("isotropic-equivalent jet energy ...... %3.2e\n", Eiso);
-    std::printf("E-iso / M-cloud ...................... %3.2e\n", Eiso / Mtot);
-    std::printf("E-jet / M-cloud ...................... %3.2e\n", Ejet / Mtot);
+    std::printf("Physics:\n\n");
+    std::printf("\ttotal atmosphere mass ................ %3.2e\n", Mtot);
+    std::printf("\tisotropic-equivalent jet luminosity... %3.2e\n", Liso);
+    std::printf("\tisotropic-equivalent jet energy ...... %3.2e\n", Eiso);
+    std::printf("\tE-iso / M-cloud ...................... %3.2e\n", Eiso / Mtot);
+    std::printf("\tE-jet / M-cloud ...................... %3.2e\n", Ejet / Mtot);
+    std::printf("\n");
 
 
     std::cout << std::string(52, '=') << "\n";

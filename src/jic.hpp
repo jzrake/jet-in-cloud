@@ -80,12 +80,14 @@ struct jic::run_config
     double tsi          = 0.1;
     int rk              = 1;
     int nr              = 32;
+    int nq              = 0; // 0 for auto
     int num_threads     = 1;
     int num_blocks      = 12;
     int test_mode       = 0;
 
     /** Physics setup */
     double jet_opening_angle = 0.5;
+    double jet_structure_exp = 2.0;
     double jet_velocity      = 0.9;
     double jet_density       = 0.01;
     double jet_timescale     = 10.0;
