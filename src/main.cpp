@@ -1044,17 +1044,13 @@ int run(int argc, const char* argv[])
     double Mtot = 4 * M_PI * (a == 3 ? std::log(r1 / r0) : 1.0 / (3 - a) * std::pow(r0, a) * (std::pow(r1, 3 - a) - std::pow(r0, 3 - a)));
     double Liso = 4 * M_PI * r0 * r0 * d0 * u0 * (g0 * h0 - 1);
     double Eiso = Liso * cfg.jet_timescale;
-    double Ejet = Eiso * 2 * std::pow(cfg.jet_opening_angle, 2); // there are two jets
+    double Ljet = r0 * r0 * d0 * u0 * u0 * 2 * std::pow(cfg.jet_opening_angle, 2);
+    double Ejet = Ljet * cfg.jet_timescale;
 
     std::cout << std::string(52, '=') << "\n";
-    std::printf("Physics:\n\n");
-    std::printf("\ttotal atmosphere mass ................ %3.2e\n", Mtot);
-    std::printf("\tisotropic-equivalent jet luminosity... %3.2e\n", Liso);
-    std::printf("\tisotropic-equivalent jet energy ...... %3.2e\n", Eiso);
-    std::printf("\tE-iso / M-cloud ...................... %3.2e\n", Eiso / Mtot);
-    std::printf("\tE-jet / M-cloud ...................... %3.2e\n", Ejet / Mtot);
-    std::printf("\n");
-
+    std::printf("total atmosphere mass ................ %3.2e\n", Mtot);
+    std::printf("actual (two-sided) jet energy ........ %3.2e\n", Ejet);
+    std::printf("E-jet / M-cloud ...................... %3.2e\n", Ejet / Mtot);
 
     std::cout << std::string(52, '=') << "\n";
     std::cout << "Main loop:\n\n";
