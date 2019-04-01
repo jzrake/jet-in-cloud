@@ -94,26 +94,24 @@ def make_diagnostic_fields(db):
     e0 = p0 / d0 / (4. / 3 - 1)
     h0 = 1.0 + e0 + p0 / d0
     gb = (ur * ur + uq * uq)**0.5
-    f0 = lar_dv / den_dv
 
-    fluid_kinetic_energy = dv * (d0 * h0 * u0 * (u0 - 1.0))
-    fluid_thermal_energy = dv * (p0 * (u0 - 1.0) + e0 * d0 * u0)
-    fluid_kinetic_energy_jet = (0 + f0) * fluid_kinetic_energy
-    fluid_kinetic_energy_cld = (1 - f0) * fluid_kinetic_energy
-    fluid_thermal_energy_jet = (0 + f0) * fluid_thermal_energy
-    fluid_thermal_energy_cld = (1 - f0) * fluid_thermal_energy
+    kinetic                  = dv * (d0 * h0 * u0 * (u0 - 1.0))
+    thermal                  = dv * (p0 * (u0 - 1.0) + e0 * d0 * u0)
+    kinetic_times_scalar = lar_dv * (d0 * h0 * u0 * (u0 - 1.0))
+    thermal_times_scalar = lar_dv * (p0 * (u0 - 1.0) + e0 * d0 * u0)
 
-
-    print("max f0:", np.max(f0))
-
+    kinetic_jet = kinetic_times_scalar / lar_dv.sum()
+    thermal_jet = thermal_times_scalar / lar_dv.sum()
+    kinetic_cld = kinetic - kinetic_jet
+    thermal_cld = thermal - thermal_jet
 
     return dict(
         gamma_beta=gb,
         theta=q0,
-        fluid_kinetic_energy_jet=fluid_kinetic_energy_jet,
-        fluid_kinetic_energy_cld=fluid_kinetic_energy_cld,
-        fluid_thermal_energy_jet=fluid_thermal_energy_jet,
-        fluid_thermal_energy_cld=fluid_thermal_energy_cld)
+        kinetic_jet=kinetic_jet,
+        kinetic_cld=kinetic_cld,
+        thermal_jet=thermal_jet,
+        thermal_cld=thermal_cld)
 
 
 if __name__ == "__main__":
@@ -124,8 +122,13 @@ if __name__ == "__main__":
 
     diag = make_diagnostic_fields(load_checkpoint(args.filenames[0]))
 
-    iq = 4
-    Ej = diag['fluid_kinetic_energy_jet'][:,iq].sum()
-    Ec = diag['fluid_kinetic_energy_cld'][:,iq].sum()
 
-    print(Ej/Ec)
+    iq = 16
+    Ej = diag['thermal_jet'][:,iq].sum()
+    Ec = diag['thermal_cld'][:,iq].sum()
+    print(Ej, Ec)
+
+
+    Ej = diag['kinetic_jet'][:,iq].sum()
+    Ec = diag['kinetic_cld'][:,iq].sum()
+    print(Ej, Ec)
