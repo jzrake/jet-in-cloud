@@ -11,3 +11,5 @@ Makefile.in
 data
 media
 frames
+products*
+trash
