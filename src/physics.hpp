@@ -742,7 +742,7 @@ struct sru_hydro::riemann_hlle
 
         if (aface < am)
         {
-            for (int q = 0; q < 5; ++q)
+            for (int q = 0; q < 6; ++q)
             {
                 U[q] = Ul[q];
                 F[q] = Fl[q];
@@ -750,7 +750,7 @@ struct sru_hydro::riemann_hlle
         }
         else if (aface > ap)
         {
-            for (int q = 0; q < 5; ++q)
+            for (int q = 0; q < 6; ++q)
             {
                 U[q] = Ur[q];
                 F[q] = Fr[q];
@@ -758,35 +758,17 @@ struct sru_hydro::riemann_hlle
         }
         else
         {
-            for (int q = 0; q < 5; ++q)
+            for (int q = 0; q < 6; ++q)
             {
                 U[q] = (ap * Ur[q] - am * Ul[q] + (Fl[q] - Fr[q])) / (ap - am);
                 F[q] = (ap * Fl[q] - am * Fr[q] - (Ul[q] - Ur[q]) * ap * am) / (ap - am);
             }
         }
 
-        for (auto q = 0; q < 5; ++q)
+        for (int q = 0; q < 6; ++q)
         {
             F[q] -= U[q] * aface;
         }
-
-        Ul[LAR] = std::min(Ul[LAR], Ul[DDD]);
-        Ur[LAR] = std::min(Ur[LAR], Ur[DDD]);
-
-        double fL = Ul[LAR] / Ul[DDD];
-        double fR = Ur[LAR] / Ur[DDD];
-
-        F[LAR] = F[DDD] * (F[DDD] > 0.0 ? fL : fR);
-
-        // if (fL > 1 || fR > 1)
-        // {
-        //     printf("WARNING: more scalar than mass %e %e\n", fL, fR);
-        // }
-
-        // if (fabs(F[LAR]) > fabs(F[DDD]))
-        // {
-        //     printf("WARNING: more scalar flux than mass flux %e\n", F[LAR] / F[DDD]);
-        // }
         return F;
     }
 
