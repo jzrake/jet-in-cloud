@@ -94,24 +94,38 @@ def make_diagnostic_fields(db):
     e0 = p0 / d0 / (4. / 3 - 1)
     h0 = 1.0 + e0 + p0 / d0
     gb = (ur * ur + uq * uq)**0.5
+    f0 = lar_dv / den_dv
+    f0[f0 > 1.0] = 1.0
 
-    kinetic                  = dv * (d0 * h0 * u0 * (u0 - 1.0))
-    thermal                  = dv * (p0 * (u0 - 1.0) + e0 * d0 * u0)
-    kinetic_times_scalar = lar_dv * (d0 * h0 * u0 * (u0 - 1.0))
-    thermal_times_scalar = lar_dv * (p0 * (u0 - 1.0) + e0 * d0 * u0)
-
-    kinetic_jet = kinetic_times_scalar / lar_dv.sum()
-    thermal_jet = thermal_times_scalar / lar_dv.sum()
-    kinetic_cld = kinetic - kinetic_jet
-    thermal_cld = thermal - thermal_jet
+    kinetic = dv * (d0 * h0 * u0 * (u0 - 1.0))
+    thermal = dv * (p0 * (u0 - 1.0) + e0 * d0 * u0)
 
     return dict(
         gamma_beta=gb,
         theta=q0,
-        kinetic_jet=kinetic_jet,
-        kinetic_cld=kinetic_cld,
-        thermal_jet=thermal_jet,
-        thermal_cld=thermal_cld)
+        kinetic_jet=kinetic * (0 + f0),
+        kinetic_cld=kinetic * (1 - f0),
+        thermal_jet=thermal * (0 + f0),
+        thermal_cld=thermal * (1 - f0))
+
+
+
+def plot_energy_partition_at_polar_angle(which, num, ax1, fname):
+
+    db = load_checkpoint(fname)
+    diag = make_diagnostic_fields(db)
+
+    keys = ['kinetic_jet', 'kinetic_cld', 'thermal_jet', 'thermal_cld']
+    results = {key: [diag[key][:,iq].sum() for iq in range(32)] for key in keys}
+    theta = [diag['theta'][0,iq] for iq in range(32)]
+
+    lw = 1.0 + 4.0 * which / num
+    al = 1.0 - 0.8 * which / num
+    jlabel = 'Jet' if which == 0 else None
+    clabel = 'Cloud' if which == 0 else None
+    ax1.plot(theta, results['kinetic_jet'], ls='-', lw=lw, c=(0.4, 0.8, 0.4), alpha=al, label=jlabel)
+    ax1.plot(theta, results['kinetic_cld'], ls='-', lw=lw, c=(0.4, 0.4, 0.8), alpha=al, label=clabel)
+
 
 
 if __name__ == "__main__":
@@ -120,15 +134,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
 
-    diag = make_diagnostic_fields(load_checkpoint(args.filenames[0]))
+    fig = plt.figure()
+    ax1 = fig.add_subplot(1, 1, 1)
 
+    for which, fname in enumerate(args.filenames):
+        plot_energy_partition_at_polar_angle(which, len(args.filenames), ax1, fname)
 
-    iq = 16
-    Ej = diag['thermal_jet'][:,iq].sum()
-    Ec = diag['thermal_cld'][:,iq].sum()
-    print(Ej, Ec)
+    ax1.legend()
+    ax1.set_yscale('log')
+    ax1.set_xlabel(r'$\theta$')
 
-
-    Ej = diag['kinetic_jet'][:,iq].sum()
-    Ec = diag['kinetic_cld'][:,iq].sum()
-    print(Ej, Ec)
+    plt.show()

@@ -161,10 +161,10 @@ def figure2(args):
         shock_index = np.argmax(u)
 
         p[p < 0] = 1e-10
-        ax1.plot(r, d, label=r'$\rho$')
-        ax1.plot(r, u, label=r'$\gamma \beta$')
+        #ax1.plot(r, d, label=r'$\rho$ ' + fname)
+        #ax1.plot(r, u, label=r'$\gamma \beta$')
         ax1.plot(r, f, label=r'$f$')
-        ax1.plot(r, p, '-o', mfc='none', label=r'$p$')
+        #ax1.plot(r, p, '-o', mfc='none', label=r'$p$ ' + fname)
         #ax1.plot(r, u/(abs(p/d))**0.5, '-o', mfc='none', label='Mach')
 
     ax1.legend()
