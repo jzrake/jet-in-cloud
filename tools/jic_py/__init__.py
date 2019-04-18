@@ -1,11 +1,6 @@
-#!/usr/bin/env python3
-
-
-import argparse
 import os
 import struct
 import json
-import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -90,19 +85,29 @@ def make_diagnostic_fields(db):
     for f in [ur, uq, d0, p0, dv, r0, q0, den_dv, lar_dv, tau_dv]:
         f.resize(f.shape[0] * f.shape[1], f.shape[2])
 
+    tau = tau_dv / dv
     u0 = (1.0 + ur * ur + uq * uq)**0.5
     e0 = p0 / d0 / (4. / 3 - 1)
     h0 = 1.0 + e0 + p0 / d0
     gb = (ur * ur + uq * uq)**0.5
+    vr = ur / u0
     f0 = lar_dv / den_dv
     f0[f0 > 1.0] = 1.0
 
     kinetic = dv * (d0 * h0 * u0 * (u0 - 1.0))
     thermal = dv * (p0 * (u0 - 1.0) + e0 * d0 * u0)
+    flow_luminosity = r0**2 * vr * (tau + p0)
+    shock_parameter = r0**2 * gb**2
 
     return dict(
-        gamma_beta=gb,
         theta=q0,
+        radius=r0,
+        gamma_beta=gb,
+        flow_luminosity=flow_luminosity,
+        shock_parameter=shock_parameter,
+        pressure=p0,
+        density=d0,
+        specific_scalar=f0,
         kinetic_jet=kinetic * (0 + f0),
         kinetic_cld=kinetic * (1 - f0),
         thermal_jet=thermal * (0 + f0),
@@ -110,38 +115,52 @@ def make_diagnostic_fields(db):
 
 
 
-def plot_energy_partition_at_polar_angle(which, num, ax1, fname):
-
-    db = load_checkpoint(fname)
-    diag = make_diagnostic_fields(db)
-
-    keys = ['kinetic_jet', 'kinetic_cld', 'thermal_jet', 'thermal_cld']
-    results = {key: [diag[key][:,iq].sum() for iq in range(32)] for key in keys}
-    theta = [diag['theta'][0,iq] for iq in range(32)]
-
-    lw = 1.0 + 4.0 * which / num
-    al = 1.0 - 0.8 * which / num
-    jlabel = 'Jet' if which == 0 else None
-    clabel = 'Cloud' if which == 0 else None
-    ax1.plot(theta, results['kinetic_jet'], ls='-', lw=lw, c=(0.4, 0.8, 0.4), alpha=al, label=jlabel)
-    ax1.plot(theta, results['kinetic_cld'], ls='-', lw=lw, c=(0.4, 0.4, 0.8), alpha=al, label=clabel)
+def integrate_power_law(r0, r1, a):
+    if a == 3:
+        return 4 * np.pi * np.log(r1 / r0)
+    else:
+        return 4 * np.pi / (3 - a) * r0**a * (r1**(3 - a) - r0**(3 - a))
 
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("filenames", nargs='+')
-    args = parser.parse_args()
+def get_run_dimensions(fname, echo=False):
+    cfg = load_config(fname)
+    a = cfg['density_index']
+    tj = cfg['jet_opening_angle']
+    te = cfg['jet_timescale']
+    d0 = cfg['jet_density']
+    u0 = cfg['jet_velocity']
+    r0 = 1.0
+    r1 = 100 # WARNING: setting fiducial cutoff radius to 100
+    Mtot = integrate_power_law(r0, r1, a)
+    Ljet = r0**2 * d0 * u0**2 * 2 * tj**2
+    Ejet = Ljet * te;
 
+    SolarMass = 2e33
+    LightSpeed = 3e10
+    CloudMass = 0.02 * SolarMass
+    LightCrossingTime = 0.01 # WARNING: assuming inner radius is 10 light-ms
+    EngineDuration = LightCrossingTime * te
+    JetEnergy = Ejet / Mtot * CloudMass * LightSpeed**2
+    dLdcostOnAxis = JetEnergy / EngineDuration / (2 * tj**2)
 
-    fig = plt.figure()
-    ax1 = fig.add_subplot(1, 1, 1)
+    if echo:
+        print("density index                : {} (a == 3 ? {})".format(a, a == 3))
+        print("opening angle                : {}".format(tj))
+        print("E / M                        : {}".format(Ejet / Mtot))
+        print("cloud mass (code)            : {}".format(Mtot))
+        print("jet energy (code)            : {}".format(Ejet))
+        print("cloud mass (g)               : {}".format(CloudMass))
+        print("jet energy (cm)              : {}".format(JetEnergy))
+        print("on-axis dL/dcos(t) (erg/s/Sr): {}".format(dLdcostOnAxis))
 
-    for which, fname in enumerate(args.filenames):
-        plot_energy_partition_at_polar_angle(which, len(args.filenames), ax1, fname)
-
-    ax1.legend()
-    ax1.set_yscale('log')
-    ax1.set_xlabel(r'$\theta$')
-
-    plt.show()
+    return dict(
+        SolarMass=SolarMass,
+        LightSpeed=LightSpeed,
+        CloudMass=CloudMass,
+        LightCrossingTime=LightCrossingTime,
+        EngineDuration=EngineDuration,
+        JetEnergy=JetEnergy,
+        dLdcostOnAxis=dLdcostOnAxis,
+        dLdcostOnAxisCode=r0**2 * d0 * u0**2,
+        InnerBoundaryRadius=LightCrossingTime * LightSpeed)
