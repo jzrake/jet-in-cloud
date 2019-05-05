@@ -21,12 +21,14 @@ diag = jic_py.make_diagnostic_fields(db)
 
 j = args.theta_index
 u = diag['gamma_beta'][:,j]
+p = diag['pressure'][:,j]
 r = diag['radius'][:,j]
 L = diag['flow_luminosity'][:,j]
 shock_index = np.argmax(diag['shock_parameter'][:,j])
 
 ax1.plot(r, u, label=r'$\gamma \beta_r$')
 ax1.plot(r, L, label=r'$r^2 T^{0r}$')
+ax1.plot(r, p, label=r'$p$')
 ax1.axvline(diag['radius'][shock_index,0], lw=1, ls='--', c='k')
 
 ax1.legend()

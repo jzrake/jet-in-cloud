@@ -164,3 +164,14 @@ def get_run_dimensions(fname, echo=False):
         dLdcostOnAxis=dLdcostOnAxis,
         dLdcostOnAxisCode=r0**2 * d0 * u0**2,
         InnerBoundaryRadius=LightCrossingTime * LightSpeed)
+
+
+
+def locate_shock_index(diag, theta_index):
+    dp = np.diff(diag['pressure'][:, theta_index])
+    return np.where(dp > 0)[0][-1]
+
+    # import matplotlib.pyplot as plt
+    # plt.plot(np.diff(diag['pressure'][:, theta_index]))
+    # plt.show()
+    # exit()

@@ -3,7 +3,6 @@ import argparse
 import pickle
 import os
 import numpy as np
-import matplotlib.pyplot as plt
 import jic_py
 
 
@@ -22,7 +21,8 @@ def make_data_product(fname):
 	R0 = dim['InnerBoundaryRadius']
 
 	theta_indexes = range(args.max_theta_index)
-	shock_radial_indexes = [np.argmax(diag['shock_parameter'][:,j]) for j in theta_indexes]
+	# shock_radial_indexes = [np.argmax(diag['shock_parameter'][:,j]) for j in theta_indexes]
+	shock_radial_indexes = [jic_py.locate_shock_index(diag, j) for j in theta_indexes]
 	shock_radii = [R0 * diag['radius'][i,0] for i in shock_radial_indexes]
 	flow_luminosities_at_shock = [L0 / L1 * diag['flow_luminosity'][shock_radial_indexes[j],j] for j in theta_indexes]
 	thetas = [diag['theta'][0,j] for j in theta_indexes]
@@ -43,11 +43,11 @@ def load_or_make_data_product(fname):
 		print("loading result from", fname)
 		return pickle.load(open(fname, 'rb'))
 	else:
-		pname = fname + '.shock_geometry'
+		pname = fname.strip('/') + '.shock_geometry'
 		res = make_data_product(fname)
 		with open(pname, 'wb') as outf:
 			pickle.dump(res, outf)
-		print("cacheing result to", pname)
+		print("caching result to", pname)
 		return res
 
 
@@ -58,9 +58,13 @@ parser.add_argument("--max-theta-index", default=64, type=int)
 parser.add_argument("--show", action='store_true')
 args = parser.parse_args()
 
-fig = plt.figure(figsize=[6,8])
-ax1 = fig.add_subplot(2, 1, 1)
-ax2 = fig.add_subplot(2, 1, 2)
+
+
+if args.show:
+	import matplotlib.pyplot as plt
+	fig = plt.figure(figsize=[6,8])
+	ax1 = fig.add_subplot(2, 1, 1)
+	ax2 = fig.add_subplot(2, 1, 2)
 
 colors = [(c * 0.8, c, c * 0.8) for c in np.linspace(0.6, 0.3, len(args.filenames))]
 
@@ -75,14 +79,15 @@ for c, fname in zip(colors, args.filenames):
 		thetas = p['thetas']
 		Lengine = p['Lengine']
 
-		label1 = r'$r_{\rm shock}$' if fname == args.filenames[0] else None
-		label2 = r'$L(\theta, r_{\rm inner})$' if fname == args.filenames[0] else None
+		# label1 = r'$r_{\rm shock}$' if False and fname == args.filenames[0] else None
+		label1 = r'$r_{\rm shock}$' if False and fname == args.filenames[0] else None
+		label2 = r'$L(\theta, r_{\rm inner})$' if False and fname == args.filenames[0] else None
 
 		ax1.plot(thetas, shock_radii, lw=3, c=c, label=label1)
 		ax2.plot(thetas, flow_luminosities_at_shock, lw=3, c=c, label=r'$L(\theta, r_{\rm shock})$')
 
-		if fname == args.filenames[-1]:
-			ax2.plot(thetas, Lengine, label=label2, ls='--', lw=1, c='k')
+		if fname == args.filenames[-1] or True:
+			ax2.plot(thetas, Lengine, label=label2, ls='--', lw=1, c=c)
 
 
 if args.show:
