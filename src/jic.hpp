@@ -92,6 +92,7 @@ struct jic::run_config
     double jet_density       = 0.01;
     double jet_timescale     = 10.0;
     double density_index     = 2.0;
+    double cutoff_radius     = 1.0;
     double temperature       = 0.01;
     double outer_radius      = 10.0;
     double expansion_rate    = 0.0;

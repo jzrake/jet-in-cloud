@@ -30,6 +30,7 @@ VISITABLE_STRUCT(run_config,
     jet_density,
     jet_timescale,
     density_index,
+    cutoff_radius,
     temperature,
     outer_radius);
 

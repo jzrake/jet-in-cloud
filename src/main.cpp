@@ -303,8 +303,9 @@ private:
 // ============================================================================
 struct atmosphere
 {
-    atmosphere(double density_index, double temperature)
+    atmosphere(double density_index, double cutoff_radius, double temperature)
     : density_index(density_index)
+    , cutoff_radius(cutoff_radius)
     , temperature(temperature)
     {
     }
@@ -313,9 +314,25 @@ struct atmosphere
     {
         const double r = X[0];
         const double a = density_index;
-        return std::array<double, 6>{std::pow(r, -a), 0.0, 0.0, 0.0, temperature * std::pow(r, -a)};
+        const double d = r < cutoff_radius ? 1.0 : std::pow(r / cutoff_radius, -a);
+        return std::array<double, 6>{d, 0.0, 0.0, 0.0, temperature * d};
     }
+
+    double total_mass(double outer_radius) const
+    {
+        double a = density_index;
+        double ri = 1.0;
+        double r0 = cutoff_radius;
+        double r1 = outer_radius;
+
+        auto mass_inside_cutoff = 4. / 3 * M_PI * (std::pow(r0, 3) - std::pow(ri, 3));
+        auto mass_beyond_cutoff = 4 * M_PI * (a == 3 ? std::log(r1 / r0) : 1.0 / (3 - a) * std::pow(r0, a) * (std::pow(r1, 3 - a) - std::pow(r0, 3 - a)));
+
+        return mass_inside_cutoff + mass_beyond_cutoff;
+    }
+
     double density_index;
+    double cutoff_radius;
     double temperature;
 };
 
@@ -445,7 +462,7 @@ struct jet_boundary_value
     {
         auto prim_to_cons = ufunc::vfrom([p2c=hydro::prim_to_cons()] (hydro::Vars P) { return p2c(P, {1.0}); });
         auto P = nd::array<double, 3>(2, patch.shape(1), 6);
-        auto atm = atmosphere(cfg.density_index, cfg.temperature);
+        auto atm = atmosphere(cfg.density_index, cfg.cutoff_radius, cfg.temperature);
 
         for (int i = 0; i < 2; ++i)
         {
@@ -968,7 +985,7 @@ Database create_database(run_config cfg)
         }
         else
         {
-            auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.temperature));
+            auto initial_data = ufunc::vfrom(atmosphere(cfg.density_index, cfg.cutoff_radius, cfg.temperature));
             database.insert(std::make_tuple(i, 0, 0, Field::conserved), prim_to_cons(initial_data(x_cells), v_cells));
         }
     }
@@ -1039,11 +1056,7 @@ int run(int argc, const char* argv[])
     double r1 = cfg.outer_radius;
     double d0 = cfg.jet_density;
     double u0 = cfg.jet_velocity;
-    double g0 = std::sqrt(1.0 + u0 * u0);
-    double h0 = 1.0; // accurate when cfg.temperature is very small
-    double Mtot = 4 * M_PI * (a == 3 ? std::log(r1 / r0) : 1.0 / (3 - a) * std::pow(r0, a) * (std::pow(r1, 3 - a) - std::pow(r0, 3 - a)));
-    double Liso = 4 * M_PI * r0 * r0 * d0 * u0 * (g0 * h0 - 1);
-    double Eiso = Liso * cfg.jet_timescale;
+    double Mtot = atmosphere(cfg.density_index, cfg.cutoff_radius, cfg.temperature).total_mass(r1);
     double Ljet = r0 * r0 * d0 * u0 * u0 * 2 * std::pow(cfg.jet_opening_angle, 2);
     double Ejet = Ljet * cfg.jet_timescale;
 
