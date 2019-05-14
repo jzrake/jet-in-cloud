@@ -155,6 +155,7 @@ def get_run_dimensions(fname, echo=False):
         print("on-axis dL/dcos(t) (erg/s/Sr): {}".format(dLdcostOnAxis))
 
     return dict(
+        JetEnergyInCodeUnits=Ejet,
         SolarMass=SolarMass,
         LightSpeed=LightSpeed,
         CloudMass=CloudMass,
@@ -168,10 +169,9 @@ def get_run_dimensions(fname, echo=False):
 
 
 def locate_shock_index(diag, theta_index):
-    dp = np.diff(diag['pressure'][:, theta_index])
-    return np.where(dp > 0)[0][-1]
-
-    # import matplotlib.pyplot as plt
-    # plt.plot(np.diff(diag['pressure'][:, theta_index]))
-    # plt.show()
-    # exit()
+    try:
+        dp = np.diff(diag['pressure'][:, theta_index])
+        return np.where(dp > 0)[0][-1]
+    except:
+        print("warning, no shock located")
+        return 0

@@ -24,12 +24,15 @@ u = diag['gamma_beta'][:,j]
 p = diag['pressure'][:,j]
 r = diag['radius'][:,j]
 L = diag['flow_luminosity'][:,j]
-shock_index = np.argmax(diag['shock_parameter'][:,j])
+ishock = jic_py.locate_shock_index(diag, 0)
+rshock = r[ishock]
+
+# shock_index = np.argmax(diag['shock_parameter'][:,j])
 
 ax1.plot(r, u, label=r'$\gamma \beta_r$')
 ax1.plot(r, L, label=r'$r^2 T^{0r}$')
 ax1.plot(r, p, label=r'$p$')
-ax1.axvline(diag['radius'][shock_index,0], lw=1, ls='--', c='k')
+ax1.axvline(rshock, lw=1, ls='--', c='k')
 
 ax1.legend()
 ax1.set_title(os.path.basename(args.filename) + ', ' + r'$\theta={:.3f}$'.format(diag['theta'][0,j]))

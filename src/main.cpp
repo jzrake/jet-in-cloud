@@ -455,6 +455,9 @@ struct jet_boundary_value
         auto f1 = u0 * std::exp(-std::pow((q - q1) / dq, cfg.jet_structure_exp));
         auto scalar = dg;
         auto inflowP = hydro::Vars{dg, f0 + f1, 0.0, 0.0, cfg.temperature * dg, scalar};
+
+        // NOTE: the actual jet velocity will be 1/e times u0!
+
         return inflowP;
     }
 
